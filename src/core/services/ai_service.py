@@ -1,8 +1,11 @@
 import logging
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
+from django.conf import settings
 from django.utils import timezone
 
 from src.core.models.location import Camera
@@ -39,14 +42,18 @@ class AIService:
         frame: np.ndarray,
         location_id: int,
         camera_id: int,
+        timestamp: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """Bitta kadrni tahlil qiladi."""
-        timestamp = timezone.now()
+        if timestamp is None:
+            timestamp = timezone.now()
+
         detected_persons = self.person_service.detect_persons_sync(frame)
         detected_faces = self.face_service.detect_faces(frame)
 
         identified_employees: List[Dict[str, Any]] = []
         draft_employees: List[Dict[str, Any]] = []
+        clients: List[Dict[str, Any]] = []
         seen_employee_ids = set()
         seen_signatures = set()
 
@@ -67,14 +74,39 @@ class AIService:
                         "id": employee_id,
                         "name": identity.get("employee_name"),
                         "confidence": identity.get("confidence", 0.0),
+                        "source": "known_employee",
                     }
                 )
                 continue
 
+            signature = self.face_service.get_face_signature(face_img)
+            presence = None
+            if signature:
+                presence = self.face_service.update_face_presence(signature, location_id, timestamp)
+
+            if presence and presence.get("is_employee"):
+                identified_employees.append(
+                    {
+                        "id": None,
+                        "name": "Uzoq muddatli yuz (xodimdan xavotir)",
+                        "confidence": 0.0,
+                        "source": "presence_threshold",
+                        "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1),
+                    }
+                )
+            else:
+                clients.append(
+                    {
+                        "signature": signature,
+                        "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1) if presence else 0,
+                        "status": "customer",
+                    }
+                )
+
             candidate = self.face_service.track_frequent_face(face_img, location_id)
-            signature = candidate.get("signature")
-            if candidate.get("employee_id") and signature not in seen_signatures:
-                seen_signatures.add(signature)
+            signature_id = candidate.get("signature")
+            if candidate.get("employee_id") and signature_id not in seen_signatures:
+                seen_signatures.add(signature_id)
                 draft_employees.append(
                     {
                         "employee_id": candidate.get("employee_id"),
@@ -95,70 +127,150 @@ class AIService:
             "detected_faces": len(detected_faces),
             "identified_employees": identified_employees,
             "draft_employees": draft_employees,
+            "clients": clients,
             "behavioral_metrics": behavior,
             "risk": risk,
         }
 
-    def analyze_camera(self, camera: Camera) -> Dict[str, Any]:
-        """Kameraning joriy streamidan bitta snapshot olib tahlil qiladi."""
+    def analyze_camera(self, camera: Camera, duration_seconds: int = None) -> Dict[str, Any]:
+        """Kamera streamidan ketma-ket kadrlar oladi va doimiy tahlil qiladi."""
         stream_url = camera.stream_url or f"rtsp://{camera.ip_address}:{camera.port}/stream"
         stream_status = self.camera_service.test_camera_stream_sync(stream_url)
 
         if not stream_status.get("success"):
+            logger.warning(
+                "Stream testi muvaffaqiyatsiz: %s (%s). Analizni davom ettiraman.",
+                stream_url,
+                stream_status.get("error"),
+            )
+
+        run_duration = duration_seconds if duration_seconds is not None else getattr(settings, "CAMERA_ANALYSIS_DURATION_SECONDS", 60)
+        analysis = self.run_stream_analysis_sync(
+            stream_url,
+            camera.location_id,
+            camera.id,
+            duration_seconds=run_duration,
+        )
+        if not analysis.get("success"):
             return {
                 "camera_id": camera.id,
                 "camera_name": camera.name,
                 "location_id": camera.location_id,
                 "status": "error",
-                "message": stream_status.get("error") or "Kamera streamiga ulanib bo‘lmadi.",
+                "message": analysis.get("error") or "Stream orqali tahlilni boshlashda xatolik.",
                 "stream_status": stream_status,
             }
 
-        frame_result = self.camera_service.capture_frame(stream_url)
-        if not frame_result.get("success"):
-            return {
-                "camera_id": camera.id,
-                "camera_name": camera.name,
-                "location_id": camera.location_id,
-                "status": "error",
-                "message": frame_result.get("error") or "Kadrni olib bo‘lmadi.",
-                "stream_status": stream_status,
-            }
-
-        analysis = self.process_frame_sync(frame_result["frame"], camera.location_id, camera.id)
         return {
             "camera_id": camera.id,
             "camera_name": camera.name,
             "location_id": camera.location_id,
             "status": "completed",
-            "message": "Kamera tahlili bajarildi.",
+            "message": "Kamera stream tahlili bajarildi.",
             "stream_status": stream_status,
             "analysis": analysis,
         }
 
-    async def run_stream_analysis(self, stream_url: str, location_id: int, camera_id: int):
-        """Streamni interval bilan ketma-ket tahlil qilish."""
-        cap = cv2.VideoCapture(stream_url)
-        if not cap.isOpened():
-            logger.error("Kamera streamiga ulanib bo‘lmadi: %s", camera_id)
-            return {"success": False, "error": "Streamga ulanib bo‘lmadi"}
-
+    def _run_http_stream_analysis_sync(
+        self,
+        stream_url: str,
+        location_id: int,
+        camera_id: int,
+        duration_seconds: int = 60,
+        frame_skip: int = 25,
+    ) -> Dict[str, Any]:
+        """HTTP stream uchun fallback qilib ketma-ket kadrlar oladi."""
         frame_idx = 0
+        analysis_count = 0
         last_analysis: Optional[Dict[str, Any]] = None
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        start_time = timezone.now()
 
-                if frame_idx % 25 == 0:
-                    last_analysis = self.process_frame_sync(frame, location_id, camera_id)
-                frame_idx += 1
-        finally:
-            cap.release()
+        failure_count = 0
+        while True:
+            if duration_seconds and (timezone.now() - start_time).total_seconds() >= duration_seconds:
+                break
+
+            result = self.camera_service.capture_frame(stream_url, timeout=5)
+            if not result.get("success") or result.get("frame") is None:
+                failure_count += 1
+                if failure_count >= 3:
+                    time.sleep(0.5)
+                else:
+                    time.sleep(0.2)
+                continue
+
+            failure_count = 0
+            frame = result["frame"]
+            if frame_idx % frame_skip == 0:
+                last_analysis = self.process_frame_sync(
+                    frame,
+                    location_id,
+                    camera_id,
+                    timestamp=timezone.now(),
+                )
+                analysis_count += 1
+            frame_idx += 1
+
+        if analysis_count == 0 and not last_analysis:
+            logger.warning(
+                "HTTP stream analizida biron bir kadr olinmadi: %s",
+                stream_url,
+            )
 
         return {
             "success": True,
             "frames_processed": frame_idx,
+            "analysis_count": analysis_count,
+            "duration_seconds": min(int((timezone.now() - start_time).total_seconds()), duration_seconds),
             "last_analysis": last_analysis,
         }
+
+    def run_stream_analysis_sync(
+        self,
+        stream_url: str,
+        location_id: int,
+        camera_id: int,
+        duration_seconds: int = 60,
+        frame_skip: int = 25,
+    ) -> Dict[str, Any]:
+        """Streamni interval bilan ketma-ket tahlil qiladi."""
+        frame_idx = 0
+        analysis_count = 0
+        last_analysis: Optional[Dict[str, Any]] = None
+        start_time = timezone.now()
+
+        failure_count = 0
+        while True:
+            if duration_seconds and (timezone.now() - start_time).total_seconds() >= duration_seconds:
+                break
+
+            result = self.camera_service.capture_frame(stream_url, timeout=5)
+            if not result.get("success") or result.get("frame") is None:
+                failure_count += 1
+                if failure_count > 10:
+                    logger.warning("Kamera streamdan kadr olishda uzluksizlik bor: %s", stream_url)
+                time.sleep(0.2)
+                continue
+
+            failure_count = 0
+            frame = result["frame"]
+            if frame_idx % frame_skip == 0:
+                last_analysis = self.process_frame_sync(
+                    frame,
+                    location_id,
+                    camera_id,
+                    timestamp=timezone.now(),
+                )
+                analysis_count += 1
+            frame_idx += 1
+
+        return {
+            "success": True,
+            "frames_processed": frame_idx,
+            "analysis_count": analysis_count,
+            "duration_seconds": min(int((timezone.now() - start_time).total_seconds()), duration_seconds),
+            "last_analysis": last_analysis,
+        }
+
+    async def run_stream_analysis(self, stream_url: str, location_id: int, camera_id: int):
+        return self.run_stream_analysis_sync(stream_url, location_id, camera_id)

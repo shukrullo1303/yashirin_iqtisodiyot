@@ -1,7 +1,7 @@
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from src.api.views.location.camera_view import camera_stream_view
+from src.api.views.location.camera_view import camera_stream_view, camera_stream_snapshot_view
 import src.core.models as models
 
 from src.api.views.analytics.analytics import AnalyticsViewSet
@@ -44,5 +44,6 @@ urlpatterns = [
     path("auth/me/", CurrentUserAPIView.as_view(), name="auth-me"),
     path("drf-auth/", include("rest_framework.urls")),
     path('cameras/stream/', camera_stream_view, name='camera-stream'),
+    path('cameras/stream/snapshot/', camera_stream_snapshot_view, name='camera-stream-snapshot'),
 ]
 

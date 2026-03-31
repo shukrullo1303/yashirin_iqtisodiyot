@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from 'react-query'
 import {
   Alert,
@@ -98,6 +98,9 @@ function Cameras() {
   const [locationId, setLocationId] = useState<string>('')
   const [formLocationId, setFormLocationId] = useState<string>('')
   const [analysisByCamera, setAnalysisByCamera] = useState<Record<number, AnalysisResult>>({})
+  const [analysisActiveByCamera, setAnalysisActiveByCamera] = useState<Record<number, boolean>>({})
+  const analysisPollingRef = useRef<Record<number, number>>({})
+  const analysisPendingRef = useRef<Record<number, boolean>>({})
 
   const { data: cameras = [], isLoading, isError } = useQuery(['cameras', locationId], async () => {
     const response = await apiClient.get('cameras/', {
@@ -160,6 +163,66 @@ function Cameras() {
       toast.error(extractErrorMessage(err))
     },
   })
+
+  const runAnalysisForCamera = (cameraId: number) => {
+    if (analysisPendingRef.current[cameraId]) {
+      return
+    }
+
+    analysisPendingRef.current[cameraId] = true
+    analyzeMutation.mutate(cameraId, {
+      onSuccess: (response: any) => {
+        setAnalysisByCamera((previous) => ({
+          ...previous,
+          [cameraId]: response.data,
+        }))
+        queryClient.invalidateQueries('employees')
+      },
+      onError: () => {
+        // Manual analysis errors are shown by the mutation handler.
+      },
+      onSettled: () => {
+        analysisPendingRef.current[cameraId] = false
+      },
+    })
+  }
+
+  const startAnalysis = (cameraId: number) => {
+    if (analysisPollingRef.current[cameraId]) {
+      return
+    }
+
+    setAnalysisActiveByCamera((previous) => ({
+      ...previous,
+      [cameraId]: true,
+    }))
+
+    runAnalysisForCamera(cameraId)
+    const intervalId = window.setInterval(() => runAnalysisForCamera(cameraId), 15000)
+    analysisPollingRef.current[cameraId] = intervalId
+  }
+
+  const stopAnalysis = (cameraId: number) => {
+    const intervalId = analysisPollingRef.current[cameraId]
+    if (intervalId) {
+      window.clearInterval(intervalId)
+      delete analysisPollingRef.current[cameraId]
+    }
+    analysisPendingRef.current[cameraId] = false
+    setAnalysisActiveByCamera((previous) => ({
+      ...previous,
+      [cameraId]: false,
+    }))
+  }
+
+  useEffect(() => {
+    return () => {
+      Object.values(analysisPollingRef.current).forEach((intervalId) => {
+        window.clearInterval(intervalId)
+      })
+      analysisPollingRef.current = {}
+    }
+  }, [])
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -264,7 +327,10 @@ function Cameras() {
             return (
               <Grid item xs={12} sm={6} md={4} key={camera.id}>
                 <Card sx={{ height: '100%' }}>
-                  <CameraStream streamUrl={camera.stream_url} isActive={camera.is_active} />
+                  <CameraStream
+                    streamUrl={camera.stream_url || `rtsp://${camera.ip_address}:${camera.port}/stream`}
+                    isActive={Boolean(camera.stream_url || camera.ip_address)}
+                  />
                   <CardContent>
                     <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
                       <Videocam sx={{ fontSize: 40, mr: 2 }} />
@@ -318,14 +384,30 @@ function Cameras() {
                       </Typography>
                     ) : null}
 
-                    <Button
-                      variant="outlined"
-                      fullWidth
-                      disabled={analyzeLoadingId === camera.id || analyzeMutation.isLoading}
-                      onClick={() => analyzeMutation.mutate(camera.id)}
-                    >
-                      {analyzeLoadingId === camera.id ? 'Tahlil qilinmoqda...' : 'Analyze qilish'}
-                    </Button>
+                    {analysisActiveByCamera[camera.id] ? (
+                      <Button
+                        variant="contained"
+                        color="error"
+                        fullWidth
+                        onClick={() => stopAnalysis(camera.id)}
+                      >
+                        Tahlilni to‘xtatish
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outlined"
+                        fullWidth
+                        disabled={analysisPendingRef.current[camera.id] || analyzeMutation.isLoading}
+                        onClick={() => startAnalysis(camera.id)}
+                      >
+                        Tahlilni boshlash
+                      </Button>
+                    )}
+                    {analysisActiveByCamera[camera.id] && (
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        Kamera uchun fon rejimida analiz davom etadi.
+                      </Typography>
+                    )}
                   </CardContent>
                 </Card>
               </Grid>

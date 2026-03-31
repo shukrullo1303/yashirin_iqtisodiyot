@@ -2,6 +2,7 @@ import base64
 import hashlib
 import logging
 import pickle
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -9,6 +10,7 @@ import numpy as np
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 
 try:
     import face_recognition
@@ -40,10 +42,55 @@ class FaceRecognitionService:
     def __init__(self):
         self.confidence_threshold = getattr(settings, "FACE_RECOGNITION_CONFIDENCE", 0.6)
         self.cache_prefix = "face_encodings_"
+        self.presence_cache_prefix = "face_presence_"
+        self.employee_presence_threshold = getattr(settings, "EMPLOYEE_PRESENCE_THRESHOLD_SECONDS", 7200)
         self.fallback_distance_threshold = 10.0
         cascade_dir = getattr(cv2.data, "haarcascades", "")
         self.face_cascade = cv2.CascadeClassifier(f"{cascade_dir}haarcascade_frontalface_default.xml") if cascade_dir else None
         logger.info("FaceRecognitionService loaded (native=%s)", face_recognition is not None)
+
+    def update_face_presence(
+        self,
+        signature: str,
+        location_id: int,
+        timestamp: Optional[datetime] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not signature:
+            return None
+
+        if timestamp is None:
+            timestamp = timezone.now()
+
+        date_key = timestamp.date().isoformat()
+        cache_key = f"{self.presence_cache_prefix}{location_id}_{signature}"
+        presence = cache.get(cache_key) or {}
+
+        if presence.get("date") != date_key:
+            presence = {
+                "signature": signature,
+                "location_id": location_id,
+                "date": date_key,
+                "first_seen": timestamp.isoformat(),
+                "last_seen": timestamp.isoformat(),
+                "total_seconds": 0,
+                "is_employee": False,
+            }
+        else:
+            last_seen = datetime.fromisoformat(presence.get("last_seen"))
+            delta = (timestamp - last_seen).total_seconds()
+            if 0 < delta <= 300:
+                presence["total_seconds"] = int(presence.get("total_seconds", 0) + delta)
+            presence["last_seen"] = timestamp.isoformat()
+
+        presence["is_employee"] = presence.get("total_seconds", 0) >= self.employee_presence_threshold
+        cache.set(cache_key, presence, 60 * 60 * 24)
+        return presence
+
+    def get_face_presence(self, signature: str, location_id: int) -> Optional[Dict[str, Any]]:
+        if not signature:
+            return None
+        cache_key = f"{self.presence_cache_prefix}{location_id}_{signature}"
+        return cache.get(cache_key)
 
     def detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Kadr ichidagi yuzlarni topadi."""

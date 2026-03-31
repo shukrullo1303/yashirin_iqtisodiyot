@@ -35,7 +35,14 @@ class CameraViewSet(BaseModelViewSet):
             )
 
         service = AIService()
-        payload = service.analyze_camera(camera)
+        duration_seconds = None
+        if request.query_params.get("duration"):
+            try:
+                duration_seconds = int(request.query_params.get("duration"))
+            except (TypeError, ValueError):
+                duration_seconds = None
+
+        payload = service.analyze_camera(camera, duration_seconds=duration_seconds)
 
         latest_analytics = models.Analytics.objects.filter(location=camera.location).order_by("-date").first()
         if latest_analytics:

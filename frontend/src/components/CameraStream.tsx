@@ -10,17 +10,38 @@ const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 
 const CameraStream: React.FC<StreamProps> = ({ streamUrl, isActive }) => {
   const [hasError, setHasError] = useState(false)
+  const [tick, setTick] = useState(0)
 
   const streamEndpoint = useMemo(() => {
-    if (!isActive || !streamUrl) {
+    if (!streamUrl) {
       return null
     }
-    return `${API_BASE}/cameras/stream/?url=${encodeURIComponent(streamUrl)}`
-  }, [isActive, streamUrl])
+
+    return `${API_BASE}/cameras/stream/snapshot/?url=${encodeURIComponent(streamUrl)}&t=${tick}`
+  }, [streamUrl, tick])
 
   useEffect(() => {
     setHasError(false)
-  }, [streamEndpoint])
+    setTick(0)
+  }, [streamUrl])
+
+  useEffect(() => {
+    if (!streamUrl) {
+      return undefined
+    }
+
+    const interval = window.setInterval(() => setTick((prev) => prev + 1), 1000)
+    return () => window.clearInterval(interval)
+  }, [streamUrl])
+
+  useEffect(() => {
+    if (!hasError) {
+      return undefined
+    }
+
+    const timeout = window.setTimeout(() => setHasError(false), 3000)
+    return () => window.clearTimeout(timeout)
+  }, [hasError])
 
   return (
     <Box
@@ -41,15 +62,17 @@ const CameraStream: React.FC<StreamProps> = ({ streamUrl, isActive }) => {
           src={streamEndpoint}
           alt="Live stream"
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          onError={() => setHasError(true)}
+          onError={() => {
+            setHasError(true)
+          }}
         />
       ) : (
         <Typography color="white">
-          {isActive ? 'Signal mavjud emas' : 'Kamera nofaol'}
+          {streamUrl ? 'Ulanishda xatolik, qayta urinmoqda...' : 'Kamera nofaol'}
         </Typography>
       )}
 
-      {isActive && (
+      {streamEndpoint && (
         <Box
           sx={{
             position: 'absolute',

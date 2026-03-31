@@ -58,7 +58,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'yashirin_iqtisodiyot',          # MySQL Workbench-da ochgan schema nomi
         'USER': 'root',               # MySQL foydalanuvchi nomi
-        'PASSWORD': 'Admin.7700', # O'rnatishda qo'ygan parolingiz
+        'PASSWORD': 'Admin7700', # O'rnatishda qo'ygan parolingiz
         'HOST': '127.0.0.1',          # Lokal kompyuter uchun
         'PORT': '3306',               # Standart MySQL porti
     }
