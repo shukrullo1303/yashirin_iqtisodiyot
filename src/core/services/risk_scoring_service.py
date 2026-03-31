@@ -23,19 +23,20 @@ class RiskScoringService:
         location_id: int,
         date: datetime
     ) -> Dict[str, Any]:
+        return self.calculate_risk_score_sync(location_id, date)
+
+    def calculate_risk_score_sync(
+        self,
+        location_id: int,
+        date: datetime
+    ) -> Dict[str, Any]:
         """Риск баҳосини ҳисоблаш"""
         try:
-            # 1. Омилларни олиш (Django ORM yordamida)
-            factors = await self._collect_factors(location_id, date)
-            
-            # 2. Риск баҳосини ҳисоблаш
+            factors = self._collect_factors_sync(location_id, date)
             risk_score = self._calculate_score(factors)
-            
-            # 3. Риск даражаси
             risk_level = self._get_risk_level(risk_score)
-            
-            # 4. Базага сақлаш (Django Create)
-            risk_record = RiskScore.objects.create(
+
+            RiskScore.objects.create(
                 location_id=location_id,
                 date=date,
                 risk_score=risk_score,
@@ -44,7 +45,7 @@ class RiskScoringService:
                 unregistered_employees=factors.get("unregistered_employees_count", 0),
                 revenue_discrepancy=factors.get("revenue_discrepancy", 0.0)
             )
-            
+
             return {
                 "location_id": location_id,
                 "date": date.isoformat(),
@@ -53,12 +54,19 @@ class RiskScoringService:
                 "factors": factors,
                 "recommendations": self._get_recommendations(risk_score, factors)
             }
-        
+
         except Exception as e:
             logger.error(f"Риск баҳолашда хатолик: {e}", exc_info=True)
             return {"error": str(e)}
     
     async def _collect_factors(
+        self,
+        location_id: int,
+        date: datetime
+    ) -> Dict[str, Any]:
+        return self._collect_factors_sync(location_id, date)
+
+    def _collect_factors_sync(
         self,
         location_id: int,
         date: datetime

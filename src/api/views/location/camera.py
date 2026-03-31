@@ -1,6 +1,5 @@
 from src.api.views.base import *
-
-
+from src.core.services.ai_service import AIService
 
 
 class CameraViewSet(BaseModelViewSet):
@@ -23,16 +22,22 @@ class CameraViewSet(BaseModelViewSet):
     @action(detail=True, methods=["post"])
     def analyze(self, request, pk=None):
         camera = self.get_object()
+        if not camera.stream_url:
+            return Response(
+                {
+                    "camera_id": camera.id,
+                    "camera_name": camera.name,
+                    "location_id": camera.location_id,
+                    "status": "error",
+                    "message": "Bu kamera uchun stream URL kiritilmagan.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = AIService()
+        payload = service.analyze_camera(camera)
+
         latest_analytics = models.Analytics.objects.filter(location=camera.location).order_by("-date").first()
-
-        payload = {
-            "camera_id": camera.id,
-            "camera_name": camera.name,
-            "location_id": camera.location_id,
-            "status": "queued",
-            "message": "Kamera tahlili ishga tushirildi.",
-        }
-
         if latest_analytics:
             payload["latest_analytics"] = {
                 "date": latest_analytics.date,
@@ -40,5 +45,9 @@ class CameraViewSet(BaseModelViewSet):
                 "estimated_revenue": latest_analytics.estimated_revenue,
             }
 
-        return Response(payload, status=status.HTTP_200_OK)
+        response_status = status.HTTP_200_OK
+        if payload.get("status") == "error":
+            response_status = status.HTTP_503_SERVICE_UNAVAILABLE
+
+        return Response(payload, status=response_status)
 
