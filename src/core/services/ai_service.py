@@ -1,165 +1,106 @@
-"""
-Асосий AI сервиси
-Барча AI модулларини бирлаштиради
-"""
-from typing import List, Dict, Any, Optional
-import numpy as np
-import cv2
-from datetime import datetime
 import logging
+import cv2
+import numpy as np
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+from django.utils import timezone
+from django.conf import settings
 
-from app.services.face_recognition_service import FaceRecognitionService
-from app.services.person_detection_service import PersonDetectionService
-from app.services.behavioral_analytics_service import BehavioralAnalyticsService
-from app.services.predictive_analytics_service import PredictiveAnalyticsService
-from app.services.risk_scoring_service import RiskScoringService
+# Ички сервисларни импорт қилиш
+from src.ai.services.face_recognition import FaceRecognitionService
+from src.ai.services.person_detection import PersonDetectionService
+from src.ai.services.behavioral_analytics import BehavioralAnalyticsService
+from src.core.models.analytics import AIProcessingLog
 
 logger = logging.getLogger(__name__)
 
-
 class AIService:
-    """Асосий AI сервиси"""
+    """Асосий AI Контроллери - Барча модулларни бошқаради"""
     
     def __init__(self):
-        """Инициализация"""
-        self.face_recognition = FaceRecognitionService()
-        self.person_detection = PersonDetectionService()
-        self.behavioral_analytics = BehavioralAnalyticsService()
-        self.predictive_analytics = PredictiveAnalyticsService()
-        self.risk_scoring = RiskScoringService()
-        logger.info("AI сервис инициализация қилинди")
-    
+        # Модулларни инициализация қилиш
+        self.face_service = FaceRecognitionService()
+        self.person_service = PersonDetectionService()
+        self.behavior_service = BehavioralAnalyticsService()
+        logger.info("Барча AI модуллари муваффақиятли юкланди")
+
     async def process_frame(
-        self,
-        frame: np.ndarray,
-        location_id: int,
-        camera_id: int,
-        timestamp: datetime
+        self, 
+        frame: np.ndarray, 
+        location_id: int, 
+        camera_id: int
     ) -> Dict[str, Any]:
-        """
-        Бир кадрни таҳлил қилиш
-        Барча AI модулларини ишга туширади
-        """
+        """Бир дона кадрни тўлиқ таҳлил қилиш цикли"""
+        timestamp = timezone.now()
+        
         results = {
-            "timestamp": timestamp.isoformat(),
-            "location_id": location_id,
+            "timestamp": timestamp,
             "camera_id": camera_id,
-            "persons": [],
-            "employees": [],
-            "unregistered_employees": []
+            "detected_persons": 0,
+            "identified_employees": [],
+            "alerts": []
         }
-        
+
         try:
-            # 1. Инсонларни аниқлаш
-            persons = await self.person_detection.detect_persons(frame)
-            results["persons"] = persons
-            
-            # 2. Ходимларни таниш
+            # 1-ҚАДАМ: Инсонларни ва уларнинг координатларини аниқлаш
+            persons = await self.person_service.detect_persons(frame)
+            results["detected_persons"] = len(persons)
+
+            # 2-ҚАДАМ: Ҳар бир аниқланган инсонни текшириш
             for person in persons:
-                face_bbox = person.get("face_bbox")
-                if face_bbox:
-                    face_image = frame[
-                        face_bbox[1]:face_bbox[3],
-                        face_bbox[0]:face_bbox[2]
-                    ]
+                # Агар юз координатлари бўлса, юзни танишга юбориш
+                face_box = person.get("face_bbox")
+                if face_box:
+                    x1, y1, x2, y2 = face_box
+                    face_img = frame[y1:y2, x1:x2]
                     
-                    # Фейс-идентификация
-                    face_result = await self.face_recognition.recognize_face(
-                        face_image,
-                        location_id
-                    )
-                    
-                    if face_result["is_employee"]:
-                        person["employee_id"] = face_result["employee_id"]
-                        person["employee_name"] = face_result["employee_name"]
-                        person["is_registered"] = face_result["is_registered"]
-                        results["employees"].append(person)
+                    if face_img.size > 0:
+                        identity = await self.face_service.recognize_face(face_img, location_id)
                         
-                        if not face_result["is_registered"]:
-                            results["unregistered_employees"].append(person)
-            
-            # 3. Хулқ-атвор таҳлили
-            behavioral_data = await self.behavioral_analytics.analyze_behavior(
-                persons,
-                timestamp
-            )
-            results["behavioral"] = behavioral_data
-            
+                        if identity["is_employee"]:
+                            results["identified_employees"].append({
+                                "id": identity["employee_id"],
+                                "name": identity["employee_name"],
+                                "confidence": identity["confidence"]
+                            })
+
+            # 3-ҚАДАМ: Хулқ-атвор ва навбат таҳлили
+            behavior = await self.behavior_service.analyze_behavior(location_id, persons, timestamp)
+            results["behavioral_metrics"] = behavior
+
+            # 4-ҚАДАМ: Натижаларни логлаш (Ихтиёрий)
+            # AIProcessingLog.objects.create(camera_id=camera_id, result_json=results)
+
         except Exception as e:
-            logger.error(f"Кадр таҳлилида хатолик: {e}", exc_info=True)
+            logger.error(f"AI Processing Error: {e}", exc_info=True)
             results["error"] = str(e)
-        
+
         return results
-    
-    async def analyze_video_stream(
-        self,
-        stream_url: str,
-        location_id: int,
-        camera_id: int,
-        duration: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """
-        Видео оқимини таҳлил қилиш
-        """
+
+    async def run_stream_analysis(self, stream_url: str, location_id: int, camera_id: int):
+        """Видео оқимини реал вақтда (ёки интервал билан) таҳлил қилиш"""
         cap = cv2.VideoCapture(stream_url)
+        
         if not cap.isOpened():
-            raise ValueError(f"Видео оқимини очиб бўлмади: {stream_url}")
-        
-        frame_count = 0
-        all_results = []
-        start_time = datetime.utcnow()
-        
+            logger.error(f"Камерага уланиб бўлмади: {camera_id}")
+            return
+
+        frame_idx = 0
         try:
-            while True:
+            while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
                     break
+
+                # Процессорни юклаб юбормаслик учун ҳар 25-кадрни (1 секунд) таҳлил қиламиз
+                if frame_idx % 25 == 0:
+                    analysis = await self.process_frame(frame, location_id, camera_id)
+                    
+                    # Агар муҳим воқеа содир бўлса (масалан, бегона шахс кирса) хабар бериш
+                    if analysis.get("detected_persons", 0) > 0:
+                        logger.info(f"Камера {camera_id}: {analysis['detected_persons']} одам аниқланди")
+
+                frame_idx += 1
                 
-                # Муддат текшириш
-                if duration and (datetime.utcnow() - start_time).seconds > duration:
-                    break
-                
-                # Ҳар 30-кадрда таҳлил (1 секунд)
-                if frame_count % 30 == 0:
-                    timestamp = datetime.utcnow()
-                    result = await self.process_frame(
-                        frame,
-                        location_id,
-                        camera_id,
-                        timestamp
-                    )
-                    all_results.append(result)
-                
-                frame_count += 1
-        
         finally:
             cap.release()
-        
-        return {
-            "total_frames": frame_count,
-            "analyzed_frames": len(all_results),
-            "results": all_results,
-            "duration": (datetime.utcnow() - start_time).total_seconds()
-        }
-    
-    async def get_predictions(
-        self,
-        location_id: int,
-        days: int = 30
-    ) -> Dict[str, Any]:
-        """Келгуси прогнозлар"""
-        return await self.predictive_analytics.get_predictions(
-            location_id,
-            days
-        )
-    
-    async def calculate_risk_score(
-        self,
-        location_id: int,
-        date: datetime
-    ) -> Dict[str, Any]:
-        """Риск баҳосини ҳисоблаш"""
-        return await self.risk_scoring.calculate_risk_score(
-            location_id,
-            date
-        )

@@ -1,218 +1,147 @@
-"""
-Интеграция сервиси
-Ташқи API билан ишлаш (Солиқ, ККТ, MyGov)
-"""
 import httpx
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
 import logging
+from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+from django.utils import timezone
+from django.conf import settings
+from django.db import transaction
 
-from app.core.config import settings
-from app.core.database import SessionLocal
-from app.models.integration import TaxIntegration, KKTIntegration
-from app.models.analytics import Analytics
+# Django моделларини импорт қилиш
+from src.core.models.integration import TaxIntegration, KKTIntegration
+from src.core.models.analytics import Analytics
 
 logger = logging.getLogger(__name__)
 
-
 class IntegrationService:
-    """Интеграция сервиси"""
+    """Интеграция сервиси (Django версия)"""
     
     def __init__(self):
-        """Инициализация"""
+        """HTTP клиентларни инициализация қилиш"""
+        # Тўғридан-тўғри settings дан олиш хавфсизликни таъминлайди
+        headers_tax = {"Authorization": f"Bearer {settings.TAX_API_KEY}"}
+        headers_mygov = {"Authorization": f"Bearer {settings.MYGOV_API_KEY}"}
+        headers_kkt = {"Authorization": f"Bearer {settings.KKT_API_KEY}"}
+
         self.tax_client = httpx.AsyncClient(
-            base_url=settings.TAX_API_URL,
-            headers={"Authorization": f"Bearer {settings.TAX_API_KEY}"},
-            timeout=30.0
+            base_url=settings.TAX_API_URL, headers=headers_tax, timeout=30.0
         )
         self.mygov_client = httpx.AsyncClient(
-            base_url=settings.MYGOV_API_URL,
-            headers={"Authorization": f"Bearer {settings.MYGOV_API_KEY}"},
-            timeout=30.0
+            base_url=settings.MYGOV_API_URL, headers=headers_mygov, timeout=30.0
         )
         self.kkt_client = httpx.AsyncClient(
-            base_url=settings.KKT_API_URL,
-            headers={"Authorization": f"Bearer {settings.KKT_API_KEY}"},
-            timeout=30.0
+            base_url=settings.KKT_API_URL, headers=headers_kkt, timeout=30.0
         )
-        logger.info("Integration сервис инициализация қилинди")
-    
-    async def sync_tax_data(
-        self,
-        location_id: int,
-        tax_id: str
-    ) -> Dict[str, Any]:
-        """
-        Солиқ маълумотларини синхронлаш
-        """
+        logger.info("Integration сервис (Django) муваффақиятли ишга тушди")
+
+    async def sync_tax_data(self, location_id: int, tax_id: str) -> Dict[str, Any]:
+        """Солиқ маълумотларини синхронлаш"""
         try:
-            db = SessionLocal()
+            # API дан маълумот олиш
+            params = {
+                "start_date": (timezone.now() - timedelta(days=30)).date().isoformat(),
+                "end_date": timezone.now().date().isoformat()
+            }
             
-            # Солиқ API дан маълумот олиш
-            response = await self.tax_client.get(
-                f"/api/tax/revenue/{tax_id}",
-                params={
-                    "start_date": (datetime.utcnow() - timedelta(days=30)).isoformat(),
-                    "end_date": datetime.utcnow().isoformat()
-                }
-            )
+            response = await self.tax_client.get(f"/api/tax/revenue/{tax_id}", params=params)
             
             if response.status_code != 200:
                 raise ValueError(f"Солиқ API хатолиги: {response.status_code}")
             
             data = response.json()
-            
-            # Базага сақлаш
-            integration = db.query(TaxIntegration).filter(
-                TaxIntegration.location_id == location_id
-            ).first()
-            
-            if not integration:
-                integration = TaxIntegration(
+
+            # Django ORM орқали маълумотларни янгилаш (Атомик транзакция)
+            with transaction.atomic():
+                integration, created = TaxIntegration.objects.update_or_create(
                     location_id=location_id,
-                    tax_id=tax_id
+                    defaults={
+                        'tax_id': tax_id,
+                        'reported_revenue': data.get("reported_revenue", 0.0),
+                        'tax_paid': data.get("tax_paid", 0.0),
+                        'last_sync': timezone.now(),
+                        'sync_status': "success",
+                        'error_message': None
+                    }
                 )
-                db.add(integration)
-            
-            integration.reported_revenue = data.get("reported_revenue", 0.0)
-            integration.tax_paid = data.get("tax_paid", 0.0)
-            integration.last_sync = datetime.utcnow()
-            integration.sync_status = "success"
-            
-            db.commit()
-            
-            # Аналитикани янгилаш
-            await self._update_analytics(location_id, integration.reported_revenue, db)
-            
-            db.close()
-            
+                
+                # Аналитикани янгилаш
+                await self._update_analytics(location_id, integration.reported_revenue)
+
             return {
                 "success": True,
-                "location_id": location_id,
                 "reported_revenue": integration.reported_revenue,
                 "tax_paid": integration.tax_paid,
                 "last_sync": integration.last_sync.isoformat()
             }
-        
+
         except Exception as e:
-            logger.error(f"Солиқ маълумотларини синхронлашда хатолик: {e}", exc_info=True)
-            
-            # Хатоликни сақлаш
-            db = SessionLocal()
-            try:
-                integration = db.query(TaxIntegration).filter(
-                    TaxIntegration.location_id == location_id
-                ).first()
-                
-                if integration:
-                    integration.sync_status = "error"
-                    integration.error_message = str(e)
-                    db.commit()
-            finally:
-                db.close()
-            
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def sync_kkt_data(
-        self,
-        location_id: int,
-        kkt_serial: str
-    ) -> Dict[str, Any]:
-        """
-        ККТ маълумотларини синхронлаш
-        """
-        try:
-            db = SessionLocal()
-            
-            # ККТ API дан маълумот олиш
-            response = await self.kkt_client.get(
-                f"/api/kkt/receipts/{kkt_serial}",
-                params={
-                    "start_date": (datetime.utcnow() - timedelta(days=7)).isoformat(),
-                    "end_date": datetime.utcnow().isoformat()
-                }
+            logger.error(f"Sync Tax Error: {e}", exc_info=True)
+            # Хатолик ҳолатини базада қайд этиш
+            TaxIntegration.objects.filter(location_id=location_id).update(
+                sync_status="error",
+                error_message=str(e)
             )
+            return {"success": False, "error": str(e)}
+
+    async def sync_kkt_data(self, location_id: int, kkt_serial: str) -> Dict[str, Any]:
+        """ККТ (Чеклар) маълумотларини синхронлаш"""
+        try:
+            params = {
+                "start_date": (timezone.now() - timedelta(days=7)).date().isoformat(),
+                "end_date": timezone.now().date().isoformat()
+            }
+            
+            response = await self.kkt_client.get(f"/api/kkt/receipts/{kkt_serial}", params=params)
             
             if response.status_code != 200:
                 raise ValueError(f"ККТ API хатолиги: {response.status_code}")
             
             data = response.json()
-            
-            # Базага сақлаш
-            integration = db.query(KKTIntegration).filter(
-                KKTIntegration.location_id == location_id
-            ).first()
-            
-            if not integration:
-                integration = KKTIntegration(
+
+            with transaction.atomic():
+                integration, _ = KKTIntegration.objects.update_or_create(
                     location_id=location_id,
-                    kkt_serial=kkt_serial
+                    defaults={
+                        'kkt_serial': kkt_serial,
+                        'total_receipts': data.get("total_receipts", 0),
+                        'total_amount': data.get("total_amount", 0.0),
+                        'last_sync': timezone.now(),
+                        'sync_status': "success"
+                    }
                 )
-                db.add(integration)
-            
-            integration.total_receipts = data.get("total_receipts", 0)
-            integration.total_amount = data.get("total_amount", 0.0)
-            integration.last_sync = datetime.utcnow()
-            integration.sync_status = "success"
-            
-            db.commit()
-            db.close()
-            
+
             return {
                 "success": True,
-                "location_id": location_id,
                 "total_receipts": integration.total_receipts,
-                "total_amount": integration.total_amount,
-                "last_sync": integration.last_sync.isoformat()
+                "total_amount": integration.total_amount
             }
-        
+
         except Exception as e:
-            logger.error(f"ККТ маълумотларини синхронлашда хатолик: {e}", exc_info=True)
-            
-            db = SessionLocal()
-            try:
-                integration = db.query(KKTIntegration).filter(
-                    KKTIntegration.location_id == location_id
-                ).first()
-                
-                if integration:
-                    integration.sync_status = "error"
-                    integration.error_message = str(e)
-                    db.commit()
-            finally:
-                db.close()
-            
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def _update_analytics(
-        self,
-        location_id: int,
-        reported_revenue: float,
-        db: SessionLocal
-    ):
-        """Аналитикани янгилаш"""
-        try:
-            # Охирги аналитика
-            analytics = db.query(Analytics).filter(
-                Analytics.location_id == location_id
-            ).order_by(Analytics.date.desc()).first()
-            
-            if analytics:
-                analytics.reported_revenue = reported_revenue
-                analytics.discrepancy = analytics.estimated_revenue - reported_revenue
-                
-                if reported_revenue > 0:
-                    analytics.discrepancy_percentage = (
-                        (analytics.discrepancy / reported_revenue) * 100
-                    )
-                
-                db.commit()
+            logger.error(f"Sync KKT Error: {e}")
+            KKTIntegration.objects.filter(location_id=location_id).update(
+                sync_status="error", error_message=str(e)
+            )
+            return {"success": False, "error": str(e)}
+
+    async def _update_analytics(self, location_id: int, reported_revenue: float):
+        """Аналитикадаги тафовутни (discrepancy) қайта ҳисоблаш"""
+        # Энг охирги аналитика ёзувини олиш
+        latest_analytics = Analytics.objects.filter(
+            location_id=location_id
+        ).order_by('-date').first()
         
-        except Exception as e:
-            logger.error(f"Аналитикани янгилашда хатолик: {e}")
+        if latest_analytics:
+            latest_analytics.reported_revenue = reported_revenue
+            # Тафовут: Биз тахмин қилган тушум - Солиқдаги расмий тушум
+            latest_analytics.discrepancy = latest_analytics.estimated_revenue - reported_revenue
+            
+            if reported_revenue > 0:
+                latest_analytics.discrepancy_percentage = (
+                    (latest_analytics.discrepancy / reported_revenue) * 100
+                )
+            latest_analytics.save()
+
+    async def close_connections(self):
+        """Клиентларни ёпиш (Ресурсларни бўшатиш)"""
+        await self.tax_client.aclose()
+        await self.mygov_client.aclose()
+        await self.kkt_client.aclose()
