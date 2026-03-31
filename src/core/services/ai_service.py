@@ -7,9 +7,9 @@ from django.utils import timezone
 from django.conf import settings
 
 # Ички сервисларни импорт қилиш
-from src.ai.services.face_recognition import FaceRecognitionService
-from src.ai.services.person_detection import PersonDetectionService
-from src.ai.services.behavioral_analytics import BehavioralAnalyticsService
+from src.core.services.face_recognition_service import FaceRecognitionService
+from src.core.services.person_detection_service import PersonDetectionService
+from src.core.services.behavioral_analytics_service import BehavioralAnalyticsService
 from src.core.models.analytics import AIProcessingLog
 
 logger = logging.getLogger(__name__)
