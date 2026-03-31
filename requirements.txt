@@ -1,6 +1,0 @@
-django
-pillow
-djangorestframework
-drf-yasg
-# django-filter
-django-debug-toolbar
