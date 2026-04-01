@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import logging
+import os
 import pickle
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,7 @@ except Exception:  # pragma: no cover - fallback when helper is absent
     encryption_service = _NoopEncryptionService()
 
 from src.core.models.employee import Employee, EmployeeFace
+from src.core.models.location import Location
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ class FaceRecognitionService:
         self.confidence_threshold = getattr(settings, "FACE_RECOGNITION_CONFIDENCE", 0.6)
         self.cache_prefix = "face_encodings_"
         self.presence_cache_prefix = "face_presence_"
-        self.employee_presence_threshold = getattr(settings, "EMPLOYEE_PRESENCE_THRESHOLD_SECONDS", 7200)
+        self.employee_presence_threshold = getattr(settings, "EMPLOYEE_PRESENCE_THRESHOLD_SECONDS", 3600)  # 1 hour default (can be 1-2h as requested)
         self.fallback_distance_threshold = 10.0
         cascade_dir = getattr(cv2.data, "haarcascades", "")
         self.face_cascade = cv2.CascadeClassifier(f"{cascade_dir}haarcascade_frontalface_default.xml") if cascade_dir else None
@@ -91,6 +93,27 @@ class FaceRecognitionService:
             return None
         cache_key = f"{self.presence_cache_prefix}{location_id}_{signature}"
         return cache.get(cache_key)
+
+    def _save_face_image(self, face_image: np.ndarray, signature: str, location_id: int) -> Optional[str]:
+        if face_image is None or face_image.size == 0 or not signature:
+            return None
+
+        try:
+            base_dir = getattr(settings, "FACE_SNAPSHOT_DIR", "face_snapshots")
+            media_root = getattr(settings, "MEDIA_ROOT", os.path.join(os.getcwd(), "media"))
+            date_folder = timezone.now().strftime("%Y%m%d")
+            target_dir = os.path.join(media_root, base_dir, str(location_id), date_folder)
+            os.makedirs(target_dir, exist_ok=True)
+
+            filename = f"{signature}_{timezone.now().strftime('%H%M%S')}.jpg"
+            filepath = os.path.join(target_dir, filename)
+            cv2.imwrite(filepath, face_image)
+
+            relpath = os.path.relpath(filepath, media_root).replace("\\", "/")
+            return relpath
+        except Exception as exc:
+            logger.error("Face image save failed: %s", exc, exc_info=True)
+            return None
 
     def detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Kadr ichidagi yuzlarni topadi."""
@@ -257,6 +280,7 @@ class FaceRecognitionService:
             face_record = EmployeeFace.objects.create(
                 employee_id=employee_id,
                 face_encoding=self._serialize_encoding(encoding),
+                image_path=self._save_face_image(image, self.get_face_signature(image) or '', Employee.objects.get(id=employee_id).location_id),
             )
 
             employee = Employee.objects.get(id=employee_id)
@@ -285,21 +309,30 @@ class FaceRecognitionService:
             return {"signature": signature, "seen_count": seen_count, "employee_id": None}
 
         passport_marker = f"AUTO-{signature[:12].upper()}"
+        location = Location.objects.filter(id=location_id).first()
+        position_label = "AI tomonidan topilgan"
+        if location:
+            location_type = location.get_location_type_display() if location.location_type else ''
+            position_label = f"{location.name} {location_type} xodimi".strip()
+
         employee, created = Employee.objects.get_or_create(
             location_id=location_id,
             passport_number=passport_marker,
             defaults={
                 "full_name": f"Auto detected employee {signature[:6].upper()}",
-                "position": "AI tomonidan topilgan",
+                "position": position_label,
                 "is_registered": False,
                 "is_active": True,
             },
         )
 
+        image_path = self._save_face_image(face_image, signature, location_id)
+
         if not employee.faces.exists():
             EmployeeFace.objects.create(
                 employee=employee,
                 face_encoding=self._serialize_encoding(np.asarray(encoding, dtype=np.float32)),
+                image_path=image_path,
                 confidence=float(min(0.99, 0.5 + (seen_count * 0.1))),
             )
             cache.delete(f"{self.cache_prefix}{location_id}")
@@ -311,4 +344,6 @@ class FaceRecognitionService:
             "employee_name": employee.full_name,
             "auto_registered": created,
             "is_registered": employee.is_registered,
+            "image_path": image_path,
+            "position": employee.position,
         }

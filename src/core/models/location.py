@@ -27,6 +27,9 @@ class Location(BaseModel):
     longitude = models.FloatField(null=True, blank=True, verbose_name="Uzunlik (Long)")
     tax_id = models.CharField(max_length=50, unique=True, null=True, blank=True, verbose_name="STIR (ИНН)")
     
+    # Ro'yxatdan o'tganligi
+    is_registered = models.BooleanField(default=False, verbose_name="Ro'yxatdan o'tganmi")
+    
     # Foydalanuvchi (Egasi) bilan bog'liqlik
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,

@@ -11,18 +11,20 @@ const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 const CameraStream: React.FC<StreamProps> = ({ streamUrl, isActive }) => {
   const [hasError, setHasError] = useState(false)
   const [tick, setTick] = useState(0)
+  const [sessionKey, setSessionKey] = useState(Date.now())
 
   const streamEndpoint = useMemo(() => {
     if (!streamUrl) {
       return null
     }
 
-    return `${API_BASE}/cameras/stream/snapshot/?url=${encodeURIComponent(streamUrl)}&t=${tick}`
-  }, [streamUrl, tick])
+    return `${API_BASE}/cameras/stream/snapshot/?url=${encodeURIComponent(streamUrl)}&t=${tick}&session=${sessionKey}`
+  }, [streamUrl, tick, sessionKey])
 
   useEffect(() => {
     setHasError(false)
     setTick(0)
+    setSessionKey(Date.now())
   }, [streamUrl])
 
   useEffect(() => {
@@ -32,6 +34,18 @@ const CameraStream: React.FC<StreamProps> = ({ streamUrl, isActive }) => {
 
     const interval = window.setInterval(() => setTick((prev) => prev + 1), 1000)
     return () => window.clearInterval(interval)
+  }, [streamUrl])
+
+  useEffect(() => {
+    if (!streamUrl) {
+      return undefined
+    }
+
+    const reconnectInterval = window.setInterval(() => {
+      setSessionKey(Date.now())
+    }, 5 * 60 * 1000) // 5 minutes
+
+    return () => window.clearInterval(reconnectInterval)
   }, [streamUrl])
 
   useEffect(() => {
@@ -68,7 +82,7 @@ const CameraStream: React.FC<StreamProps> = ({ streamUrl, isActive }) => {
         />
       ) : (
         <Typography color="white">
-          {streamUrl ? 'Ulanishda xatolik, qayta urinmoqda...' : 'Kamera nofaol'}
+          {streamUrl ? 'Tasvir yuklanmadi, qayta urinmoqda...' : 'Kamera nofaol'}
         </Typography>
       )}
 

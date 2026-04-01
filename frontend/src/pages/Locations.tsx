@@ -23,7 +23,7 @@ import {
   MenuItem,
   Stack,
 } from '@mui/material'
-import { Edit, Delete, Add as AddIcon, OpenInNew } from '@mui/icons-material'
+import { Edit, Delete, Add as AddIcon, OpenInNew, CheckCircle } from '@mui/icons-material'
 import toast from 'react-hot-toast'
 import apiClient from '../api/client'
 import GoogleMapPicker from '../components/GoogleMapPicker'
@@ -34,6 +34,7 @@ interface Location {
   address: string
   tax_id?: string | null
   is_active: boolean
+  is_registered: boolean
   location_type: string
   latitude?: number | null
   longitude?: number | null
@@ -123,6 +124,16 @@ function Locations() {
   const deleteMutation = useMutation<void, any, number>((id) => apiClient.delete(`locations/${id}/`), {
     onSuccess: () => {
       toast.success('Lokatsiya o‘chirildi')
+      queryClient.invalidateQueries('locations')
+    },
+    onError: (err: any) => {
+      toast.error(extractErrorMessage(err))
+    },
+  })
+
+  const checkRegistrationMutation = useMutation<any, any, number>((locationId) => apiClient.post('tax-integrations/check-registration/', { location_id: locationId }), {
+    onSuccess: (data) => {
+      toast.success(data.message)
       queryClient.invalidateQueries('locations')
     },
     onError: (err: any) => {
@@ -221,6 +232,7 @@ function Locations() {
               <TableCell>Koordinata</TableCell>
               <TableCell>INN</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>Ro'yxatdan o'tgan</TableCell>
               <TableCell align="right">Amallar</TableCell>
             </TableRow>
           </TableHead>
@@ -253,7 +265,13 @@ function Locations() {
                 <TableCell>
                   <Chip label={loc.is_active ? 'Faol' : 'Nofaol'} color={loc.is_active ? 'success' : 'default'} size="small" />
                 </TableCell>
+                <TableCell>
+                  <Chip label={loc.is_registered ? 'Ha' : 'Yo\'q'} color={loc.is_registered ? 'success' : 'error'} size="small" />
+                </TableCell>
                 <TableCell align="right">
+                  <IconButton color="secondary" onClick={() => checkRegistrationMutation.mutate(loc.id)} disabled={checkRegistrationMutation.isLoading}>
+                    <CheckCircle fontSize="small" />
+                  </IconButton>
                   <IconButton color="primary" onClick={() => handleOpen(loc)}>
                     <Edit fontSize="small" />
                   </IconButton>

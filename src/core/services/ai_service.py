@@ -77,12 +77,17 @@ class AIService:
                         "source": "known_employee",
                     }
                 )
+                # Save known employee face snapshot too
+                sig = self.face_service.get_face_signature(face_img) or f"employee_{employee_id}"
+                self.face_service._save_face_image(face_img, sig, location_id)
                 continue
 
             signature = self.face_service.get_face_signature(face_img)
             presence = None
             if signature:
                 presence = self.face_service.update_face_presence(signature, location_id, timestamp)
+                # Save unknown/customer face snapshot for future audit
+                self.face_service._save_face_image(face_img, signature, location_id)
 
             if presence and presence.get("is_employee"):
                 identified_employees.append(

@@ -15,6 +15,7 @@ import {
   Divider,
   FormControl,
   Grid,
+  IconButton,
   InputLabel,
   List,
   ListItem,
@@ -25,7 +26,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { Videocam } from '@mui/icons-material'
+import { Videocam, Edit, Delete } from '@mui/icons-material'
 import toast from 'react-hot-toast'
 import apiClient from '../api/client'
 import CameraStream from '../components/CameraStream'
@@ -50,6 +51,7 @@ interface EmployeeItem {
   id: number
   full_name: string
   position?: string | null
+  phone?: string | null
   is_registered: boolean
   is_active: boolean
 }
@@ -94,7 +96,7 @@ const extractErrorMessage = (error: any) => {
 function Cameras() {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [analyzeLoadingId, setAnalyzeLoadingId] = useState<number | null>(null)
+  const [analyzeLoadingByCamera, setAnalyzeLoadingByCamera] = useState<Record<number, boolean>>({})
   const [locationId, setLocationId] = useState<string>('')
   const [formLocationId, setFormLocationId] = useState<string>('')
   const [analysisByCamera, setAnalysisByCamera] = useState<Record<number, AnalysisResult>>({})
@@ -132,6 +134,25 @@ function Cameras() {
     [locationId, locations]
   )
 
+  const [editingEmployee, setEditingEmployee] = useState<EmployeeItem | null>(null)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editFormData, setEditFormData] = useState({ full_name: '', phone: '', position: '' })
+
+  const editEmployeeMutation = useMutation(
+    (payload: { id: number; data: Partial<EmployeeItem> }) => apiClient.patch(`employees/${payload.id}/`, payload.data),
+    {
+      onSuccess: () => {
+        toast.success('Xodim yangilandi')
+        queryClient.invalidateQueries(['employees', locationId])
+        setEditDialogOpen(false)
+        setEditingEmployee(null)
+      },
+      onError: (error) => {
+        toast.error(extractErrorMessage(error))
+      },
+    }
+  )
+
   const connectMutation = useMutation((data: CameraPayload) => apiClient.post('cameras/', data), {
     onSuccess: () => {
       toast.success('Kamera muvaffaqiyatli qo‘shildi')
@@ -144,9 +165,19 @@ function Cameras() {
     },
   })
 
+  const deleteCameraMutation = useMutation((cameraId: number) => apiClient.delete(`cameras/${cameraId}/`), {
+    onSuccess: () => {
+      toast.success('Kamera o‘chirildi')
+      queryClient.invalidateQueries('cameras')
+    },
+    onError: (err: any) => {
+      toast.error(extractErrorMessage(err))
+    },
+  })
+
   const analyzeMutation = useMutation((cameraId: number) => apiClient.post(`cameras/${cameraId}/analyze/`), {
     onMutate: (cameraId) => {
-      setAnalyzeLoadingId(cameraId)
+      setAnalyzeLoadingByCamera((prev) => ({ ...prev, [cameraId]: true }))
     },
     onSuccess: (response: any, cameraId: number) => {
       setAnalysisByCamera((previous) => ({
@@ -156,8 +187,8 @@ function Cameras() {
       queryClient.invalidateQueries('employees')
       toast.success(response?.data?.message || 'Tahlil bajarildi')
     },
-    onSettled: () => {
-      setAnalyzeLoadingId(null)
+    onSettled: (data, error, cameraId) => {
+      setAnalyzeLoadingByCamera((prev) => ({ ...prev, [cameraId]: false }))
     },
     onError: (err: any) => {
       toast.error(extractErrorMessage(err))
@@ -198,7 +229,7 @@ function Cameras() {
     }))
 
     runAnalysisForCamera(cameraId)
-    const intervalId = window.setInterval(() => runAnalysisForCamera(cameraId), 15000)
+    const intervalId = window.setInterval(() => runAnalysisForCamera(cameraId), 5 * 60 * 1000)
     analysisPollingRef.current[cameraId] = intervalId
   }
 
@@ -347,7 +378,7 @@ function Cameras() {
 
                     <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
                       <Chip
-                        label={camera.is_active ? 'Faol' : 'Nofaol'}
+                        label={camera.is_active ? 'Ulangan' : 'Ulanmagan'}
                         color={camera.is_active ? 'success' : 'default'}
                         size="small"
                       />
@@ -384,25 +415,44 @@ function Cameras() {
                       </Typography>
                     ) : null}
 
-                    {analysisActiveByCamera[camera.id] ? (
-                      <Button
-                        variant="contained"
-                        color="error"
-                        fullWidth
-                        onClick={() => stopAnalysis(camera.id)}
-                      >
-                        Tahlilni to‘xtatish
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outlined"
-                        fullWidth
-                        disabled={analysisPendingRef.current[camera.id] || analyzeMutation.isLoading}
-                        onClick={() => startAnalysis(camera.id)}
-                      >
-                        Tahlilni boshlash
-                      </Button>
-                    )}
+                    <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                      {analysisActiveByCamera[camera.id] ? (
+                        <Button
+                          variant="contained"
+                          color="error"
+                          fullWidth
+                          onClick={() => stopAnalysis(camera.id)}
+                        >
+                          Tahlilni to‘xtatish
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outlined"
+                          fullWidth
+                          disabled={analysisPendingRef.current[camera.id] || analyzeLoadingByCamera[camera.id]}
+                          onClick={() => startAnalysis(camera.id)}
+                        >
+                          Tahlilni boshlash
+                        </Button>
+                      )}
+                      <Box sx={{ display: 'flex', gap: 0.5 }}>
+                        <IconButton size="small" color="primary">
+                          <Edit />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          color="error"
+                          disabled={deleteCameraMutation.isLoading}
+                          onClick={() => {
+                            if (window.confirm('Bu kamerani o‘chirishni xohlaysizmi?')) {
+                              deleteCameraMutation.mutate(camera.id)
+                            }
+                          }}
+                        >
+                          <Delete />
+                        </IconButton>
+                      </Box>
+                    </Box>
                     {analysisActiveByCamera[camera.id] && (
                       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                         Kamera uchun fon rejimida analiz davom etadi.
@@ -437,17 +487,32 @@ function Cameras() {
                     primary={employee.full_name}
                     secondary={employee.position || (employee.is_registered ? 'Ro‘yxatdan o‘tgan' : 'AI draft xodim')}
                   />
-                  <Chip
-                    label={employee.is_registered ? 'Ro‘yxatdan o‘tgan' : 'Draft'}
-                    color={employee.is_registered ? 'success' : 'warning'}
-                    size="small"
-                    sx={{ mr: 1 }}
-                  />
-                  <Chip
-                    label={employee.is_active ? 'Faol' : 'Nofaol'}
-                    color={employee.is_active ? 'success' : 'default'}
-                    size="small"
-                  />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setEditingEmployee(employee)
+                        setEditFormData({
+                          full_name: employee.full_name,
+                          phone: (employee as any).phone || '',
+                          position: employee.position || '',
+                        })
+                        setEditDialogOpen(true)
+                      }}
+                    >
+                      <Edit />
+                    </IconButton>
+                    <Chip
+                      label={employee.is_registered ? 'Ro‘yxatdan o‘tgan' : 'Draft'}
+                      color={employee.is_registered ? 'success' : 'warning'}
+                      size="small"
+                    />
+                    <Chip
+                      label={employee.is_active ? 'Faol' : 'Nofaol'}
+                      color={employee.is_active ? 'success' : 'default'}
+                      size="small"
+                    />
+                  </Box>
                 </ListItem>
                 {index < employees.length - 1 ? <Divider /> : null}
               </React.Fragment>
@@ -455,6 +520,56 @@ function Cameras() {
           </List>
         )}
       </Paper>
+
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} fullWidth maxWidth="sm">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!editingEmployee) return
+            editEmployeeMutation.mutate({
+              id: editingEmployee.id,
+              data: {
+                full_name: editFormData.full_name,
+                phone: editFormData.phone,
+                position: editFormData.position,
+              },
+            })
+          }}
+        >
+          <DialogTitle>Xodimni tahrirlash</DialogTitle>
+          <DialogContent dividers>
+            <Box sx={{ display: 'grid', gap: 2, pt: 1 }}>
+              <TextField
+                label="F.I.Sh."
+                value={editFormData.full_name}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, full_name: e.target.value }))}
+                fullWidth
+                required
+              />
+              <TextField
+                label="Lavozim"
+                value={editFormData.position}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, position: e.target.value }))}
+                fullWidth
+              />
+              <TextField
+                label="Telefon"
+                value={editFormData.phone}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, phone: e.target.value }))}
+                fullWidth
+              />
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ p: 2 }}>
+            <Button onClick={() => setEditDialogOpen(false)} color="inherit">
+              Bekor qilish
+            </Button>
+            <Button type="submit" variant="contained" disabled={editEmployeeMutation.isLoading}>
+              Saqlash
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <form onSubmit={handleSubmit}>
