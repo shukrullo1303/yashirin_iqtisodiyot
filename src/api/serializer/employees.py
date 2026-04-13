@@ -10,8 +10,18 @@ class EmployeeSerializer(BaseSerializer):
     latest_image_path = serializers.SerializerMethodField()
 
     def get_latest_image_path(self, obj):
-        latest_face = obj.faces.order_by('-created_at').first()
-        return latest_face.image_path if latest_face else None
+        try:
+            cache = getattr(obj, "_prefetched_objects_cache", None)
+            if cache and "faces" in cache:
+                faces = cache["faces"]
+                if not faces:
+                    return None
+                latest = max(faces, key=lambda f: f.created_at)
+                return latest.image_path
+            latest_face = obj.faces.order_by("-created_at").first()
+            return latest_face.image_path if latest_face else None
+        except Exception:
+            return None
 
     class Meta:
         model = models.Employee

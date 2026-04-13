@@ -45,7 +45,8 @@ class FaceRecognitionService:
         self.confidence_threshold = getattr(settings, "FACE_RECOGNITION_CONFIDENCE", 0.6)
         self.cache_prefix = "face_encodings_"
         self.presence_cache_prefix = "face_presence_"
-        self.employee_presence_threshold = getattr(settings, "EMPLOYEE_PRESENCE_THRESHOLD_SECONDS", 3600)  # 1 hour default (can be 1-2h as requested)
+        # Kamroq vaqt kamera oldida = mijoz; shu sekunddan ko‘p = potentsial xodim (2 soat = 7200, 3 soat = 10800).
+        self.employee_presence_threshold = getattr(settings, "EMPLOYEE_PRESENCE_THRESHOLD_SECONDS", 7200)
         self.fallback_distance_threshold = 10.0
         cascade_dir = getattr(cv2.data, "haarcascades", "")
         self.face_cascade = cv2.CascadeClassifier(f"{cascade_dir}haarcascade_frontalface_default.xml") if cascade_dir else None
@@ -76,15 +77,29 @@ class FaceRecognitionService:
                 "last_seen": timestamp.isoformat(),
                 "total_seconds": 0,
                 "is_employee": False,
+                "role": "unknown",
             }
         else:
             last_seen = datetime.fromisoformat(presence.get("last_seen"))
             delta = (timestamp - last_seen).total_seconds()
-            if 0 < delta <= 300:
-                presence["total_seconds"] = int(presence.get("total_seconds", 0) + delta)
+            # Sekin oqimda ham jamlansin: bir sessiya deb 30 min gacha bo‘shliq, har qadamda max 5 min qo‘shiladi.
+            if 0 < delta <= 1800:
+                presence["total_seconds"] = int(
+                    presence.get("total_seconds", 0) + min(delta, 300)
+                )
             presence["last_seen"] = timestamp.isoformat()
 
-        presence["is_employee"] = presence.get("total_seconds", 0) >= self.employee_presence_threshold
+        total_secs = presence.get("total_seconds", 0)
+        if total_secs >= self.employee_presence_threshold:
+            presence["is_employee"] = True
+            presence["role"] = "potential_employee"
+        elif total_secs > 0:
+            presence["role"] = "customer"
+            presence["is_employee"] = False
+        else:
+            presence["role"] = "unknown"
+            presence["is_employee"] = False
+
         cache.set(cache_key, presence, 60 * 60 * 24)
         return presence
 
@@ -114,6 +129,31 @@ class FaceRecognitionService:
         except Exception as exc:
             logger.error("Face image save failed: %s", exc, exc_info=True)
             return None
+
+    def _largest_face_crop(self, image_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """To‘liq kadr ichidan eng katta yuzni kesib oladi (ro‘yxat/tanish uchun)."""
+        if image_bgr is None or image_bgr.size == 0:
+            return None
+        try:
+            rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            if face_recognition is not None:
+                locs = face_recognition.face_locations(rgb)
+                if locs:
+                    top, right, bottom, left = max(
+                        locs, key=lambda t: (t[2] - t[0]) * (t[1] - t[3])
+                    )
+                    return image_bgr[max(0, top) : bottom, max(0, left) : right]
+            if self.face_cascade and not self.face_cascade.empty():
+                gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+                dets = self.face_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
+                )
+                if len(dets):
+                    x, y, w, h = max(dets, key=lambda r: r[2] * r[3])
+                    return image_bgr[y : y + h, x : x + w]
+        except Exception as exc:
+            logger.warning("Face crop failed: %s", exc)
+        return None
 
     def detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Kadr ichidagi yuzlarni topadi."""
@@ -273,17 +313,28 @@ class FaceRecognitionService:
         try:
             nparr = np.frombuffer(image_bytes, np.uint8)
             image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            encoding = self._encode_face(image)
+            crop = self._largest_face_crop(image)
+            face_input = crop if crop is not None and crop.size else image
+            encoding = self._encode_face(face_input)
             if encoding is None:
                 return {"success": False, "error": "Yuz aniqlanmadi"}
 
+            serialized = self._serialize_encoding(encoding)
+            employee = Employee.objects.get(id=employee_id)
             face_record = EmployeeFace.objects.create(
                 employee_id=employee_id,
-                face_encoding=self._serialize_encoding(encoding),
-                image_path=self._save_face_image(image, self.get_face_signature(image) or '', Employee.objects.get(id=employee_id).location_id),
+                face_encoding=serialized,
+                image_path=self._save_face_image(
+                    face_input,
+                    self.get_face_signature(face_input) or "",
+                    employee.location_id,
+                ),
             )
+            employee.face_embedding = serialized
+            if employee.status == 'active':
+                employee.status = 'active'
+            employee.save(update_fields=['face_embedding', 'status'])
 
-            employee = Employee.objects.get(id=employee_id)
             cache.delete(f"{self.cache_prefix}{employee.location_id}")
             return {"success": True, "face_id": face_record.id}
         except Exception as exc:
@@ -322,9 +373,14 @@ class FaceRecognitionService:
                 "full_name": f"Auto detected employee {signature[:6].upper()}",
                 "position": position_label,
                 "is_registered": False,
+                "is_verified": False,
+                "status": "candidate_by_ai",
                 "is_active": True,
             },
         )
+        if not created and employee.status != 'candidate_by_ai':
+            employee.status = 'candidate_by_ai'
+            employee.save(update_fields=['status'])
 
         image_path = self._save_face_image(face_image, signature, location_id)
 
@@ -340,6 +396,84 @@ class FaceRecognitionService:
         return {
             "signature": signature,
             "seen_count": seen_count,
+            "employee_id": employee.id,
+            "employee_name": employee.full_name,
+            "auto_registered": created,
+            "is_registered": employee.is_registered,
+            "image_path": image_path,
+            "position": employee.position,
+        }
+
+    @transaction.atomic
+    def ensure_draft_employee_for_presence(
+        self,
+        face_image: np.ndarray,
+        signature: str,
+        location_id: int,
+        presence: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Kamera oldida yetarli uzoq turgan (vaqt chegarasidan oshgan) yuz uchun bitta draft xodim va ID."""
+        if (
+            not signature
+            or not presence
+            or presence.get("role") != "potential_employee"
+        ):
+            return {"employee_id": None}
+
+        encoding = self._encode_face(face_image)
+        if encoding is None:
+            return {"employee_id": None}
+
+        passport_marker = f"AUTO-{signature[:12].upper()}"
+        location = Location.objects.filter(id=location_id).first()
+        position_label = "AI tomonidan topilgan"
+        if location:
+            location_type = (
+                location.get_location_type_display() if location.location_type else ""
+            )
+            position_label = f"{location.name} {location_type} xodimi".strip()
+
+        employee, created = Employee.objects.get_or_create(
+            location_id=location_id,
+            passport_number=passport_marker,
+            defaults={
+                "full_name": f"Auto detected employee {signature[:6].upper()}",
+                "position": position_label,
+                "is_registered": False,
+                "is_verified": False,
+                "status": "candidate_by_ai",
+                "is_active": True,
+            },
+        )
+        if not created and employee.status != "candidate_by_ai":
+            employee.status = "candidate_by_ai"
+            employee.save(update_fields=["status"])
+
+        image_path = self._save_face_image(face_image, signature, location_id)
+
+        if not employee.faces.exists():
+            EmployeeFace.objects.create(
+                employee=employee,
+                face_encoding=self._serialize_encoding(
+                    np.asarray(encoding, dtype=np.float32)
+                ),
+                image_path=image_path,
+                confidence=float(
+                    min(
+                        0.99,
+                        0.5
+                        + (presence.get("total_seconds", 0) / max(1, self.employee_presence_threshold)) * 0.4,
+                    )
+                ),
+            )
+            cache.delete(f"{self.cache_prefix}{location_id}")
+            employee.face_embedding = self._serialize_encoding(
+                np.asarray(encoding, dtype=np.float32)
+            )
+            employee.save(update_fields=["face_embedding"])
+
+        return {
+            "signature": signature,
             "employee_id": employee.id,
             "employee_name": employee.full_name,
             "auto_registered": created,

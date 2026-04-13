@@ -14,7 +14,20 @@ class Employee(BaseModel):
     phone = models.CharField(max_length=50, null=True, blank=True, verbose_name="Телефон")
     email = models.EmailField(max_length=255, null=True, blank=True, verbose_name="Email")
     passport_number = models.CharField(max_length=50, null=True, blank=True, verbose_name="Паспорт серияси")
-    is_registered = models.BooleanField(default=True, verbose_name="Рўйхатдан ўтганми")
+    inn = models.CharField(max_length=20, null=True, blank=True, verbose_name="INN")
+    face_embedding = models.TextField(null=True, blank=True, verbose_name="Yuz embedding")
+    is_registered = models.BooleanField(default=False, verbose_name="Рўйхатдан ўтганми")
+    is_verified = models.BooleanField(default=False, verbose_name="Солиқчи тасдиғи")
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Faol'),
+            ('fired', 'Ishdan bo‘shatilgan'),
+            ('candidate_by_ai', 'AI tomonidan nomzod'),
+        ],
+        default='active',
+        verbose_name='Статус',
+    )
     is_active = models.BooleanField(default=True, verbose_name="Актив")
     hire_date = models.DateField(null=True, blank=True, verbose_name="Ишга кирган санаси")
     

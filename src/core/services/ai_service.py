@@ -57,6 +57,9 @@ class AIService:
         seen_employee_ids = set()
         seen_signatures = set()
 
+        potential_employees: List[Dict[str, Any]] = []
+        tax_alerts: List[Dict[str, Any]] = []
+
         for face in detected_faces:
             x1, y1, x2, y2 = face["bbox"]
             face_img = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
@@ -64,7 +67,7 @@ class AIService:
                 continue
 
             identity = self.face_service.recognize_face_sync(face_img, location_id)
-            if identity.get("is_employee"):
+            if identity.get("is_employee") and identity.get("employee_id"):
                 employee_id = identity.get("employee_id")
                 if employee_id in seen_employee_ids:
                     continue
@@ -77,7 +80,6 @@ class AIService:
                         "source": "known_employee",
                     }
                 )
-                # Save known employee face snapshot too
                 sig = self.face_service.get_face_signature(face_img) or f"employee_{employee_id}"
                 self.face_service._save_face_image(face_img, sig, location_id)
                 continue
@@ -86,38 +88,46 @@ class AIService:
             presence = None
             if signature:
                 presence = self.face_service.update_face_presence(signature, location_id, timestamp)
-                # Save unknown/customer face snapshot for future audit
                 self.face_service._save_face_image(face_img, signature, location_id)
 
-            if presence and presence.get("is_employee"):
-                identified_employees.append(
+            if presence and presence.get("role") == "potential_employee":
+                draft_info = self.face_service.ensure_draft_employee_for_presence(
+                    face_img, signature, location_id, presence
+                )
+                pe_entry: Dict[str, Any] = {
+                    "signature": signature,
+                    "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1),
+                    "source": "behavioral_threshold",
+                }
+                if draft_info.get("employee_id"):
+                    pe_entry["employee_id"] = draft_info["employee_id"]
+                    pe_entry["employee_name"] = draft_info.get("employee_name")
+                potential_employees.append(pe_entry)
+                tax_alerts.append(
                     {
-                        "id": None,
-                        "name": "Uzoq muddatli yuz (xodimdan xavotir)",
-                        "confidence": 0.0,
-                        "source": "presence_threshold",
+                        "signature": signature,
                         "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1),
+                        "reason": "Potential employee not officially registered",
                     }
                 )
-            else:
+                eid = draft_info.get("employee_id")
+                if eid and signature not in seen_signatures:
+                    seen_signatures.add(signature)
+                    draft_employees.append(
+                        {
+                            "employee_id": eid,
+                            "employee_name": draft_info.get("employee_name"),
+                            "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1),
+                            "source": "presence_duration",
+                            "auto_registered": draft_info.get("auto_registered", False),
+                        }
+                    )
+            elif presence and presence.get("role") == "customer":
                 clients.append(
                     {
                         "signature": signature,
-                        "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1) if presence else 0,
+                        "seen_minutes": round(presence.get("total_seconds", 0) / 60, 1),
                         "status": "customer",
-                    }
-                )
-
-            candidate = self.face_service.track_frequent_face(face_img, location_id)
-            signature_id = candidate.get("signature")
-            if candidate.get("employee_id") and signature_id not in seen_signatures:
-                seen_signatures.add(signature_id)
-                draft_employees.append(
-                    {
-                        "employee_id": candidate.get("employee_id"),
-                        "employee_name": candidate.get("employee_name"),
-                        "seen_count": candidate.get("seen_count", 0),
-                        "auto_registered": candidate.get("auto_registered", False),
                     }
                 )
 
@@ -131,8 +141,10 @@ class AIService:
             "detected_persons": len(detected_persons),
             "detected_faces": len(detected_faces),
             "identified_employees": identified_employees,
+            "potential_employees": potential_employees,
             "draft_employees": draft_employees,
             "clients": clients,
+            "tax_alerts": tax_alerts,
             "behavioral_metrics": behavior,
             "risk": risk,
         }

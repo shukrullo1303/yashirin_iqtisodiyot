@@ -4,15 +4,53 @@ import os
 
 BASE_DIR = BASE_DIR.parent
 
+# Debug toolbar va runserver uchun
+INTERNAL_IPS = ["127.0.0.1", "::1"]
+
+# MySQL yo‘q bo‘lsa: $env:USE_SQLITE="1" (PowerShell) yoki export USE_SQLITE=1
+if os.environ.get("USE_SQLITE", "").lower() in ("1", "true", "yes"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+}
+
+# Frontend (3000) ↔ API (8000) sessiya cookie
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False
+
 EXTERNAL_APPS = [
-    'rest_framework', 
+    'rest_framework',
     'drf_yasg',
     "debug_toolbar",
+    "corsheaders",
 ]
 
 LOCAL_APPS = ["src.core"]
 
 INSTALLED_APPS += EXTERNAL_APPS + LOCAL_APPS
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+}
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+
+INTERNAL_IPS = ["127.0.0.1", "::1"]
 
 SECRET_KEY = "secret-key-for-local-development"
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'testserver']
@@ -24,6 +62,7 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'debug_toolbar.middleware.DebugToolbarMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -36,6 +75,9 @@ MIDDLEWARE = [
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Kamera oldida yuz: shu vaqtdan kam = mijoz, ko‘p = potentsial xodim (sekundda). Masalan: 10800 = 3 soat.
+EMPLOYEE_PRESENCE_THRESHOLD_SECONDS = 7200
 
 TEMPLATES = [
     {

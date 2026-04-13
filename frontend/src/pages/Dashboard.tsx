@@ -14,6 +14,7 @@ import {
 } from '@mui/material'
 import { LocationOn, OpenInNew, People, TrendingUp, Warning } from '@mui/icons-material'
 import apiClient from '../api/client'
+import { asList } from '../utils/asList'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import GoogleMapPicker from '../components/GoogleMapPicker'
 
@@ -53,37 +54,30 @@ const fallbackChartData = [
 ]
 
 function Dashboard() {
-  const { data: locations = [], isLoading: locationsLoading, isError: locationsError } = useQuery<Location[]>(
-    'locations',
-    async () => {
-      const response = await apiClient.get('locations/')
-      return response.data
-    }
-  )
+  const locationsQuery = useQuery<unknown>('locations', async () => {
+    const response = await apiClient.get('locations/')
+    return response.data
+  })
 
-  const { data: employees = [], isLoading: employeesLoading, isError: employeesError } = useQuery<Employee[]>(
-    'employees',
-    async () => {
-      const response = await apiClient.get('employees/')
-      return response.data
-    }
-  )
+  const employeesQuery = useQuery<unknown>('employees', async () => {
+    const response = await apiClient.get('employees/')
+    return response.data
+  })
 
-  const { data: riskScores = [], isLoading: risksLoading, isError: risksError } = useQuery<RiskScore[]>(
-    'risk-scores',
-    async () => {
-      const response = await apiClient.get('risk-scores/')
-      return response.data
-    }
-  )
+  const riskScoresQuery = useQuery<unknown>('risk-scores', async () => {
+    const response = await apiClient.get('risk-scores/')
+    return response.data
+  })
 
-  const { data: analytics = [], isLoading: analyticsLoading, isError: analyticsError } = useQuery<AnalyticsItem[]>(
-    'analytics',
-    async () => {
-      const response = await apiClient.get('analytics/')
-      return response.data
-    }
-  )
+  const analyticsQuery = useQuery<unknown>('analytics', async () => {
+    const response = await apiClient.get('analytics/')
+    return response.data
+  })
+
+  const locations = asList<Location>(locationsQuery.data)
+  const employees = asList<Employee>(employeesQuery.data)
+  const riskScores = asList<RiskScore>(riskScoresQuery.data)
+  const analytics = asList<AnalyticsItem>(analyticsQuery.data)
 
   const summary = useMemo(
     () => ({
@@ -102,11 +96,18 @@ function Dashboard() {
     const latestAnalytics = [...analytics]
       .slice(0, 7)
       .reverse()
-      .map((item) => ({
-        name: new Date(item.date).toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' }),
-        customers: item.real_customers,
-        revenue: Number(item.estimated_revenue || item.reported_revenue || 0),
-      }))
+      .map((item) => {
+        const d = item?.date ? new Date(item.date) : null
+        const name =
+          d && !Number.isNaN(d.getTime())
+            ? d.toLocaleDateString('uz-UZ', { month: 'short', day: 'numeric' })
+            : '—'
+        return {
+          name,
+          customers: item.real_customers,
+          revenue: Number(item.estimated_revenue || item.reported_revenue || 0),
+        }
+      })
 
     return latestAnalytics.length ? latestAnalytics : fallbackChartData
   }, [analytics])
@@ -125,8 +126,11 @@ function Dashboard() {
     [locations]
   )
 
-  const isLoading = locationsLoading || employeesLoading || risksLoading || analyticsLoading
-  const hasError = locationsError || employeesError || risksError || analyticsError
+  const isLoading =
+    locationsQuery.isLoading ||
+    employeesQuery.isLoading ||
+    riskScoresQuery.isLoading ||
+    analyticsQuery.isLoading
 
   const openMapWindow = () => {
     window.open('/locations-map', 'all-locations-map', 'width=1450,height=900,resizable=yes,scrollbars=yes')
@@ -140,15 +144,20 @@ function Dashboard() {
     )
   }
 
-  if (hasError) {
-    return <Alert severity="error">Dashboard ma'lumotlarini yuklashda xatolik yuz berdi.</Alert>
-  }
-
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
         Dashboard
       </Typography>
+      {(locationsQuery.isError ||
+        employeesQuery.isError ||
+        riskScoresQuery.isError ||
+        analyticsQuery.isError) && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Ba’zi ma’lumotlar yuklanmadi. Sahifa qolgan qismlar bilan ishlaydi; tafsilotlar uchun brauzer
+          tarmoq jadvalini tekshiring.
+        </Alert>
+      )}
       <Grid container spacing={3} sx={{ mt: 2 }}>
         <Grid item xs={12} sm={6} md={3}>
           <Card>

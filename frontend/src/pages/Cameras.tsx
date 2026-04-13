@@ -17,6 +17,7 @@ import {
   Grid,
   IconButton,
   InputLabel,
+  Link,
   List,
   ListItem,
   ListItemText,
@@ -29,6 +30,7 @@ import {
 import { Videocam, Edit, Delete } from '@mui/icons-material'
 import toast from 'react-hot-toast'
 import apiClient from '../api/client'
+import { asList } from '../utils/asList'
 import CameraStream from '../components/CameraStream'
 
 interface CameraPayload {
@@ -66,8 +68,9 @@ interface AnalysisResult {
     draft_employees?: Array<{
       employee_id: number
       employee_name: string
-      seen_count: number
-      auto_registered: boolean
+      seen_count?: number
+      seen_minutes?: number
+      auto_registered?: boolean
     }>
     risk?: {
       risk_level?: string
@@ -97,6 +100,7 @@ function Cameras() {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [analyzeLoadingByCamera, setAnalyzeLoadingByCamera] = useState<Record<number, boolean>>({})
+  const [analyzeAllLoading, setAnalyzeAllLoading] = useState(false)
   const [locationId, setLocationId] = useState<string>('')
   const [formLocationId, setFormLocationId] = useState<string>('')
   const [analysisByCamera, setAnalysisByCamera] = useState<Record<number, AnalysisResult>>({})
@@ -104,19 +108,19 @@ function Cameras() {
   const analysisPollingRef = useRef<Record<number, number>>({})
   const analysisPendingRef = useRef<Record<number, boolean>>({})
 
-  const { data: cameras = [], isLoading, isError } = useQuery(['cameras', locationId], async () => {
+  const camerasQuery = useQuery(['cameras', locationId], async () => {
     const response = await apiClient.get('cameras/', {
       params: locationId ? { location_id: locationId } : undefined,
     })
     return response.data
   })
 
-  const { data: locations = [] } = useQuery<LocationOption[]>('locations', async () => {
+  const locationsQuery = useQuery<unknown>('locations', async () => {
     const response = await apiClient.get('locations/')
     return response.data
   })
 
-  const { data: employees = [], isLoading: isEmployeesLoading } = useQuery<EmployeeItem[]>(
+  const employeesQuery = useQuery<unknown>(
     ['employees', locationId],
     async () => {
       const response = await apiClient.get('employees/', {
@@ -128,6 +132,13 @@ function Cameras() {
       enabled: Boolean(locationId),
     }
   )
+
+  const cameras = asList<any>(camerasQuery.data)
+  const locations = asList<LocationOption>(locationsQuery.data)
+  const employees = asList<EmployeeItem>(employeesQuery.data)
+  const isLoading = camerasQuery.isLoading
+  const isError = camerasQuery.isError
+  const isEmployeesLoading = employeesQuery.isLoading
 
   const selectedLocation = useMemo(
     () => locations.find((location) => String(location.id) === locationId),
@@ -174,6 +185,48 @@ function Cameras() {
       toast.error(extractErrorMessage(err))
     },
   })
+
+  const analyzeAllMutation = useMutation(
+    async () => {
+      const body = locationId ? { location_id: Number(locationId) } : {}
+      const response = await apiClient.post('cameras/analyze-active/', body)
+      return response.data as {
+        count?: number
+        results?: AnalysisResult[]
+        errors?: Array<{ camera_id: number; error: string }>
+        message?: string
+      }
+    },
+    {
+      onMutate: () => setAnalyzeAllLoading(true),
+      onSettled: () => setAnalyzeAllLoading(false),
+      onSuccess: (data) => {
+        const rows = data?.results || []
+        if (!rows.length && data?.message) {
+          toast(data.message)
+          return
+        }
+        setAnalysisByCamera((previous) => {
+          const next = { ...previous }
+          for (const row of rows) {
+            const id = (row as { camera_id?: number }).camera_id
+            if (id != null) next[id] = row as AnalysisResult
+          }
+          return next
+        })
+        const errCount = data?.errors?.length ?? 0
+        toast.success(
+          errCount
+            ? `${rows.length} kamera tahlillandi, ${errCount} ta xato`
+            : `${rows.length} kamera parallel tahlillandi`
+        )
+        queryClient.invalidateQueries('employees')
+      },
+      onError: (err: any) => {
+        toast.error(extractErrorMessage(err))
+      },
+    }
+  )
 
   const analyzeMutation = useMutation((cameraId: number) => apiClient.post(`cameras/${cameraId}/analyze/`), {
     onMutate: (cameraId) => {
@@ -325,6 +378,17 @@ function Cameras() {
             </Select>
           </FormControl>
 
+          <Button
+            variant="outlined"
+            disabled={
+              analyzeAllLoading ||
+              cameras.length === 0 ||
+              !cameras.some((c: { is_active?: boolean }) => c.is_active)
+            }
+            onClick={() => analyzeAllMutation.mutate()}
+          >
+            {analyzeAllLoading ? 'Tahlil...' : 'Aktiv kameralarni parallel tahlil'}
+          </Button>
           <Button variant="contained" onClick={() => setOpen(true)}>
             Yangi kamera ulash
           </Button>
@@ -571,14 +635,71 @@ function Cameras() {
         </form>
       </Dialog>
 
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md">
         <form onSubmit={handleSubmit}>
           <DialogTitle>Yangi kamera ulash</DialogTitle>
           <DialogContent dividers>
+            <Alert severity="info" sx={{ mb: 2, '& code': { fontSize: '0.8rem', wordBreak: 'break-all' } }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Qanday link ishlatiladi?
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Tizim <strong>RTSP</strong> (<code>rtsp://...</code>) yoki brauzer orqali ochiladigan{' '}
+                <strong>HTTP / HTTPS</strong> (<code>http://...</code>) oqimni qabul qiladi. Login/parolni ko‘pincha
+                o‘ziga URL ichiga yozish kerak (quyidagi shablonlar).
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>rtsp.me/embed/...</strong> kabi sahifalar — bu veb-pleyer (HTML), server tahlil qila olmaydi;
+                ular faqat kartochkada <strong>iframe</strong> orqali ko‘rinadi. Avtomatik yuz tahlili uchun{' '}
+                <Link href="https://rtsp.me" target="_blank" rel="noopener noreferrer">
+                  RTSP.ME
+                </Link>{' '}
+                kabinida berilgan haqiqiy <code>rtsp://</code> manzilni yoki kameraning to‘g‘ridan-to‘g‘ri oqimini
+                kiriting.
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                Stream URL bo‘sh qoldirilsa, avtomatik: <code>rtsp://{'{IP}'}:{'{port}'}/stream</code>
+              </Typography>
+              <Typography variant="caption" component="div" sx={{ fontWeight: 600, mt: 1 }}>
+                Shablonlar (o‘z IP, login va parolingiz bilan almashtiring):
+              </Typography>
+              <Box
+                component="pre"
+                sx={{
+                  m: 0,
+                  mt: 0.5,
+                  p: 1,
+                  bgcolor: 'action.hover',
+                  borderRadius: 1,
+                  fontSize: '0.72rem',
+                  overflow: 'auto',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {`RTSP — Hikvision / ko'p DVR:
+rtsp://admin:SIZNING_PAROL@192.168.1.64:554/Streaming/Channels/101
+
+RTSP — yana bir variant (sub-stream):
+rtsp://admin:SIZNING_PAROL@192.168.1.64:554/Streaming/Channels/102
+
+RTSP — umumiy (ishlamasa, kamera qo'llanmasidagi yo'lni qo'ying):
+rtsp://admin:SIZNING_PAROL@192.168.1.64:554/h264/ch1/main/av_stream
+
+HTTP — MJPEG (ba'zi IP-kameralar, port 80 yoki 8080):
+http://192.168.1.64:8080/video.mjpg
+http://admin:SIZNING_PAROL@192.168.1.64:80/videostream.cgi`}
+              </Box>
+            </Alert>
             <Box sx={{ display: 'grid', gap: 2, pt: 1 }}>
               <TextField name="name" label="Kamera nomi" fullWidth />
-              <TextField name="ip_address" label="IP manzili" fullWidth required />
-              <TextField name="port" label="Port" fullWidth defaultValue={80} />
+              <TextField name="ip_address" label="IP manzili" fullWidth required placeholder="192.168.1.64" />
+              <TextField
+                name="port"
+                label="Port (veb / ONVIF uchun, RTSP odatda 554)"
+                fullWidth
+                defaultValue={80}
+              />
               <TextField
                 name="camera_type"
                 label="Kamera turi"
@@ -591,8 +712,18 @@ function Cameras() {
                 <option value="exit">Chiqish</option>
                 <option value="internal">Ichki</option>
               </TextField>
-              <TextField name="stream_url" label="Stream URL" fullWidth />
-              <TextField name="username" label="Foydalanuvchi" fullWidth />
+              <TextField
+                name="stream_url"
+                label="Stream URL (ixtiyoriy — bo‘sh bo‘lsa RTSP shablon ishlatiladi)"
+                fullWidth
+                placeholder="rtsp://admin:parol@192.168.1.64:554/Streaming/Channels/101"
+                helperText="Agar kamera RTSP yo‘lini bilsangiz, shu yerga to‘liq yozing. HTTP kamera bo‘lsa http://... ni yozing."
+              />
+              <TextField
+                name="username"
+                label="Foydalanuvchi (URL ichida bo‘lmasa, ba’zi integratsiyalar uchun)"
+                fullWidth
+              />
               <TextField
                 name="password"
                 label="Parol"

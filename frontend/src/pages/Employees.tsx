@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from 'react-query'
 import {
   Box,
@@ -28,6 +28,7 @@ import {
 } from '@mui/material'
 import { Edit, Delete, Add } from '@mui/icons-material'
 import apiClient from '../api/client'
+import { asList } from '../utils/asList'
 
 interface Employee {
   id: number
@@ -58,18 +59,34 @@ function Employees() {
     location: '',
     image: null as File | null,
   })
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!formData.image) {
+      setImagePreviewUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(formData.image)
+    setImagePreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [formData.image])
 
   const queryClient = useQueryClient()
 
-  const { data: employees = [], isLoading, isError } = useQuery<Employee[]>('employees', async () => {
+  const employeesQuery = useQuery<unknown>('employees', async () => {
     const response = await apiClient.get('employees/')
     return response.data
   })
 
-  const { data: locations = [] } = useQuery<Location[]>('locations', async () => {
+  const locationsQuery = useQuery<unknown>('locations', async () => {
     const response = await apiClient.get('locations/')
     return response.data
   })
+
+  const employees = asList<Employee>(employeesQuery.data)
+  const locations = asList<Location>(locationsQuery.data)
+  const isLoading = employeesQuery.isLoading || locationsQuery.isLoading
+  const isError = employeesQuery.isError
 
   const deleteMutation = useMutation(
     (id: number) => apiClient.delete(`employees/${id}/`),
@@ -87,6 +104,7 @@ function Employees() {
         queryClient.invalidateQueries('employees')
         setAddDialogOpen(false)
         setFormData({ full_name: '', position: '', phone: '', location: '', image: null })
+        setImagePreviewUrl(null)
       },
     }
   )
@@ -159,7 +177,7 @@ function Employees() {
     )
   }
 
-  if (isError) {
+  if (isError && employees.length === 0) {
     return <Alert severity="error">Xodimlarni yuklashda xatolik yuz berdi.</Alert>
   }
 
@@ -168,6 +186,11 @@ function Employees() {
       <Typography variant="h4" gutterBottom>
         Xodimlar
       </Typography>
+      {locationsQuery.isError ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Lokatsiyalar ro‘yxati yuklanmadi — filtr vaqtincha ishlamasligi mumkin.
+        </Alert>
+      ) : null}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <FormControl sx={{ minWidth: 200 }}>
           <InputLabel>Lokatsiya bo'yicha filtr</InputLabel>
@@ -215,7 +238,11 @@ function Employees() {
                   <Avatar
                     src={employee.latest_image_path ? `${apiClient.defaults.baseURL}/media/${employee.latest_image_path}` : undefined}
                     alt={employee.full_name}
-                    sx={{ width: 40, height: 40 }}
+                    variant="rounded"
+                    imgProps={{
+                      style: { objectFit: 'cover', objectPosition: 'center top' },
+                    }}
+                    sx={{ width: 72, height: 72 }}
                   >
                     {employee.full_name.charAt(0)}
                   </Avatar>
@@ -295,6 +322,33 @@ function Employees() {
               Tanlangan fayl: {formData.image.name}
             </Typography>
           )}
+          {imagePreviewUrl && (
+            <Box
+              sx={{
+                mt: 1,
+                mb: 1,
+                width: 160,
+                height: 160,
+                borderRadius: 1,
+                overflow: 'hidden',
+                border: '1px solid',
+                borderColor: 'divider',
+                alignSelf: 'center',
+              }}
+            >
+              <Box
+                component="img"
+                src={imagePreviewUrl}
+                alt="Yuz oldko‘rinishi"
+                sx={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  objectPosition: 'center top',
+                }}
+              />
+            </Box>
+          )}
           <FormControl fullWidth margin="dense">
             <InputLabel>Lokatsiya</InputLabel>
             <Select
@@ -360,6 +414,41 @@ function Employees() {
             <Typography variant="body2" sx={{ mb: 1 }}>
               Tanlangan fayl: {formData.image.name}
             </Typography>
+          )}
+          {(formData.image
+            ? imagePreviewUrl
+            : editingEmployee?.latest_image_path
+              ? `${apiClient.defaults.baseURL}/media/${editingEmployee.latest_image_path}`
+              : null) && (
+            <Box
+              sx={{
+                mt: 1,
+                mb: 1,
+                width: 160,
+                height: 160,
+                borderRadius: 1,
+                overflow: 'hidden',
+                border: '1px solid',
+                borderColor: 'divider',
+                alignSelf: 'center',
+              }}
+            >
+              <Box
+                component="img"
+                src={
+                  (formData.image
+                    ? imagePreviewUrl
+                    : `${apiClient.defaults.baseURL}/media/${editingEmployee?.latest_image_path}`) as string
+                }
+                alt="Yuz oldko‘rinishi"
+                sx={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  objectPosition: 'center top',
+                }}
+              />
+            </Box>
           )}
           <FormControl fullWidth margin="dense">
             <InputLabel>Lokatsiya</InputLabel>

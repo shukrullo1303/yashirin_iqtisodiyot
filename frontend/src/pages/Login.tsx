@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Container, Paper, TextField, Button, Typography, Box } from '@mui/material'
+import { Container, Paper, TextField, Button, Typography, Box, CircularProgress } from '@mui/material'
 import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
 
@@ -22,8 +22,14 @@ function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login } = useAuthStore()
+  const { login, isAuthenticated, isLoading } = useAuthStore()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      navigate('/', { replace: true })
+    }
+  }, [isAuthenticated, isLoading, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -38,6 +44,14 @@ function Login() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (isLoading) {
+    return (
+      <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress />
+      </Box>
+    )
   }
 
   return (
