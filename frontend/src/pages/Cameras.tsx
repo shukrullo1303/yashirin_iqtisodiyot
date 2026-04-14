@@ -425,6 +425,7 @@ function Cameras() {
                   <CameraStream
                     streamUrl={camera.stream_url || `rtsp://${camera.ip_address}:${camera.port}/stream`}
                     isActive={Boolean(camera.stream_url || camera.ip_address)}
+                    locationId={locationId ? Number(locationId) : null}
                   />
                   <CardContent>
                     <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>

@@ -9,6 +9,6 @@ class AnalyzeVideoView(APIView):
         
         # Servisni ishga tushiramiz
         analytics = VideoAnalyticsService()
-        result = analytics.process_stream(video_source)
+        result = analytics.process_camera_stream(video_source)
         
         return Response({"status": "success", "data": result})

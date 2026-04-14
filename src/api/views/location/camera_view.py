@@ -13,6 +13,7 @@ from typing import Optional
 import logging
 
 from src.core.services.camera_service import CameraService
+from src.core.services.face_recognition_service import FaceRecognitionService
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,48 @@ def _capture_snapshot(stream_url: str, timeout: int = 5) -> Optional[bytes]:
     return jpeg.tobytes()
 
 
+def _annotate_frame(frame, location_id: int = 0):
+    """Kadrga yuz bbox/label chizadi (real-time ko‘rish uchun)."""
+    if frame is None:
+        return frame
+
+    fr = FaceRecognitionService()
+    detections = fr.detect_faces(frame)
+    for det in detections[:10]:
+        try:
+            x1, y1, x2, y2 = det.get("bbox") or [0, 0, 0, 0]
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = max(0, x2), max(0, y2)
+            crop = frame[y1:y2, x1:x2]
+            rec = fr.recognize_face_sync(crop, location_id=location_id) if crop is not None and crop.size else {}
+            label = "face"
+            color = (0, 255, 255)
+            if rec and rec.get("is_employee"):
+                label = rec.get("employee_name") or "employee"
+                color = (0, 200, 0)
+            elif rec and rec.get("is_unregistered"):
+                label = "unknown"
+                color = (0, 140, 255)
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                frame,
+                str(label),
+                (x1, max(15, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+        except Exception as exc:
+            logger.debug("Annotate frame failed: %s", exc)
+            continue
+
+    return frame
+
+
 def generate_mjpeg_stream(url):
     """Kameradan kadrlarni o'qib, MJPEG generatorini hosil qiladi"""
     camera_service = CameraService()
@@ -102,14 +145,30 @@ def generate_mjpeg_stream(url):
 def camera_stream_snapshot_view(request):
     """Kameraning hozirgi kadr snapshotini qaytaradi"""
     stream_url = request.GET.get('url')
+    annotated = request.GET.get('annotated') in ('1', 'true', 'True')
+    try:
+        location_id = int(request.GET.get('location_id') or 0)
+    except Exception:
+        location_id = 0
     if not stream_url:
         return Response({'detail': 'Stream URL kiritilmagan.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    snapshot = _capture_snapshot(stream_url, timeout=5)
-    if snapshot is None:
+    if not annotated:
+        snapshot = _capture_snapshot(stream_url, timeout=5)
+        if snapshot is None:
+            return Response({'detail': 'Kameradan kadr olinmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return HttpResponse(snapshot, content_type='image/jpeg')
+
+    camera_service = CameraService()
+    result = camera_service.capture_frame(stream_url, timeout=5)
+    if not result.get('success') or result.get('frame') is None:
         return Response({'detail': 'Kameradan kadr olinmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    return HttpResponse(snapshot, content_type='image/jpeg')
+    frame = _annotate_frame(result['frame'], location_id=location_id)
+    success, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not success:
+        return Response({'detail': 'Rasm kodlanmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return HttpResponse(jpeg.tobytes(), content_type='image/jpeg')
 
 
 @api_view(['GET'])
@@ -123,3 +182,4 @@ def camera_stream_view(request):
         generate_mjpeg_stream(stream_url),
         content_type='multipart/x-mixed-replace; boundary=frame'
     )
+

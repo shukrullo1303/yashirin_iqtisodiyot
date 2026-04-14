@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 from django.conf import settings
+from django.core.cache import cache
 
 try:
     from onvif import ONVIFCamera
@@ -22,6 +23,54 @@ logger = logging.getLogger(__name__)
 
 _STREAM_HUBS_LOCK = threading.Lock()
 _STREAM_HUBS: Dict[str, "CameraStreamHub"] = {}
+
+def _is_youtube_url(url: str) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    return "youtube.com/" in u or "youtu.be/" in u
+
+
+def _resolve_youtube_stream_url(url: str, cache_ttl_seconds: int = 10 * 60) -> str:
+    """
+    YouTube havolasini OpenCV o‘qiy oladigan direct stream URL ga aylantiradi.
+    URL'lar tez eskiradi, shuning uchun qisqa TTL bilan kesh qilinadi.
+    """
+    if not _is_youtube_url(url):
+        return url
+
+    cache_key = f"yt_stream_url:{hash(url)}"
+    cached = cache.get(cache_key)
+    if isinstance(cached, str) and cached:
+        return cached
+
+    try:
+        import yt_dlp  # type: ignore
+
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "best[ext=mp4]/best",
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            direct = (info or {}).get("url")
+            if isinstance(direct, str) and direct:
+                cache.set(cache_key, direct, cache_ttl_seconds)
+                return direct
+    except Exception as exc:
+        logger.warning("YouTube stream resolve failed: %s", exc)
+
+    return url
+
+
+def _normalize_stream_url(stream_url: str) -> str:
+    if not stream_url:
+        return stream_url
+    if _is_youtube_url(stream_url):
+        return _resolve_youtube_stream_url(stream_url)
+    return stream_url
 
 
 class CameraStreamHub:
@@ -172,6 +221,7 @@ class CameraStreamHub:
 
 
 def _get_stream_hub(stream_url: str) -> CameraStreamHub:
+    stream_url = _normalize_stream_url(stream_url)
     with _STREAM_HUBS_LOCK:
         hub = _STREAM_HUBS.get(stream_url)
         if hub is None:
