@@ -18,7 +18,10 @@ class PersonDetectionService:
     """Kadrlardagi odamlarni aniqlash va sodda tracking qilish servisi."""
 
     def __init__(self):
-        self.model_path = getattr(settings, "PERSON_DETECTION_MODEL", "models/yolov8n.onnx")
+        from django.conf import settings as _settings
+        from pathlib import Path as _Path
+        _default = str(_Path(_settings.BASE_DIR).parent / "models" / "yolov8n.onnx")
+        self.model_path = getattr(_settings, "PERSON_DETECTION_MODEL", _default)
         self.confidence_threshold = getattr(settings, "DETECTION_CONFIDENCE", 0.35)
         self.session = None
         self.input_name = None

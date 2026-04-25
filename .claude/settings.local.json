@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f \"manage.py runserver\")",
+      "Bash(pkill -f \"vite\")",
+      "Bash(npm run:*)",
+      "Bash(git fetch:*)",
+      "Bash(git reset:*)"
+    ]
+  }
+}

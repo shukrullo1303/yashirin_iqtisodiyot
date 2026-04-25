@@ -1,7 +1,7 @@
-from django.views.decorators.csrf import ensure_csrf_cookie
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from src.api.views.location.camera_view import camera_stream_view, camera_stream_snapshot_view
+from src.api.views.dashboard_stats import DashboardStatsView
 import src.core.models as models
 
 from src.api.views.analytics.analytics import AnalyticsViewSet
@@ -36,6 +36,10 @@ router.register(r"kkt-integrations", KKTIntegrationViewSet, basename="kkt-integr
 
 
 urlpatterns = [
+    # Camera stream paths MUST come before include(router.urls)
+    # to prevent DRF's cameras/<pk>/ pattern from matching 'stream' as a pk.
+    path('cameras/stream/snapshot/', camera_stream_snapshot_view, name='camera-stream-snapshot'),
+    path('cameras/stream/', camera_stream_view, name='camera-stream'),
     path("", include(router.urls)),
     path("auth/csrf/", CSRFTokenAPIView.as_view(), name="auth-csrf"),
     path("auth/register/", RegisterAPIView.as_view(), name="auth-register"),
@@ -43,7 +47,6 @@ urlpatterns = [
     path("auth/logout/", LogoutAPIView.as_view(), name="auth-logout"),
     path("auth/me/", CurrentUserAPIView.as_view(), name="auth-me"),
     path("drf-auth/", include("rest_framework.urls")),
-    path('cameras/stream/', camera_stream_view, name='camera-stream'),
-    path('cameras/stream/snapshot/', camera_stream_snapshot_view, name='camera-stream-snapshot'),
+    path("dashboard/stats/", DashboardStatsView.as_view(), name="dashboard-stats"),
 ]
 

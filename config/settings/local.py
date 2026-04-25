@@ -100,10 +100,32 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'yashirin_iqtisodiyot',          # MySQL Workbench-da ochgan schema nomi
         'USER': 'root',               # MySQL foydalanuvchi nomi
-        'PASSWORD': 'Admin.7700', # O'rnatishda qo'ygan parolingiz
+        'PASSWORD': 'Admin7700', # O'rnatishda qo'ygan parolingiz
         'HOST': '127.0.0.1',          # Lokal kompyuter uchun
         'PORT': '3306',               # Standart MySQL porti
     }
 }
 
 AUTH_USER_MODEL = 'core.User'
+
+# AI analysis: run for 15 seconds per request (was 60s — too slow for HTTP)
+CAMERA_ANALYSIS_DURATION_SECONDS = 15
+
+# Face detection: kamera oldida 30 daqiqa = potentsial xodim (test uchun 1800s)
+EMPLOYEE_PRESENCE_THRESHOLD_SECONDS = 1800
+
+# In-memory cache for face encodings and presence tracking
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "yashirin-cache",
+    }
+}
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "src.shared.pagination.StandardPagination",
+    "PAGE_SIZE": 50,
+}

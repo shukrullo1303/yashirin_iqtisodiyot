@@ -170,9 +170,16 @@ class CameraStreamHub:
         except Exception as exc:
             logger.debug('StreamHub frame encoding failed: %s', exc)
 
+    @staticmethod
+    def _cv2_source(stream_url: str):
+        """Return int device index for digit strings like '0', else return string."""
+        s = stream_url.strip()
+        return int(s) if s.isdigit() else stream_url
+
     def _run(self):
         cap = None
         failure_delay = 0.2
+        cv2_source = self._cv2_source(self.stream_url)
         while True:
             try:
                 with self._lock:
@@ -182,7 +189,7 @@ class CameraStreamHub:
                     break
 
                 if cap is None:
-                    cap = cv2.VideoCapture(self.stream_url)
+                    cap = cv2.VideoCapture(cv2_source)
                     if hasattr(cv2, 'CAP_PROP_BUFFERSIZE'):
                         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     if hasattr(cv2, 'CAP_PROP_OPEN_TIMEOUT_MSEC'):
@@ -200,7 +207,10 @@ class CameraStreamHub:
                     cap = None
                     failure_delay = min(1.0, failure_delay + 0.1)
 
-                if self.stream_url.lower().startswith('http://') or self.stream_url.lower().startswith('https://'):
+                is_http = not self.stream_url.strip().isdigit() and (
+                    self.stream_url.lower().startswith('http://') or self.stream_url.lower().startswith('https://')
+                )
+                if is_http:
                     result = CameraService()._capture_http_frame(self.stream_url, timeout=self.timeout)
                     if result.get('success') and result.get('frame') is not None:
                         self._set_frame(result['frame'])
@@ -244,7 +254,7 @@ class CameraService:
     """IP kamera va streamlar bilan ishlash uchun servis."""
 
     def __init__(self):
-        logger.info("CameraService loaded")
+        logger.debug("CameraService loaded")
 
     def connect_camera_sync(
         self,
@@ -412,7 +422,8 @@ class CameraService:
 
         cap = None
         try:
-            cap = cv2.VideoCapture(stream_url)
+            cv2_src = CameraStreamHub._cv2_source(stream_url)
+            cap = cv2.VideoCapture(cv2_src)
             if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
@@ -507,10 +518,10 @@ class CameraService:
                     "resolution": f"{width}x{height}",
                 }
 
-            if self._is_http_stream_url(stream_url):
+            if not stream_url.strip().isdigit() and self._is_http_stream_url(stream_url):
                 return self._capture_http_frame(stream_url, timeout)
 
-            return {"success": False, "error": "Kamera streamiga ulanib bo‘lmadi"}
+            return {"success": False, "error": "Kamera streamiga ulanib bo’lmadi"}
         except Exception as exc:
             logger.error("Frame capture error: %s", exc, exc_info=True)
             return {"success": False, "error": str(exc)}

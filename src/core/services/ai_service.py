@@ -151,7 +151,10 @@ class AIService:
 
     def analyze_camera(self, camera: Camera, duration_seconds: int = None) -> Dict[str, Any]:
         """Kamera streamidan ketma-ket kadrlar oladi va doimiy tahlil qiladi."""
-        stream_url = camera.stream_url or f"rtsp://{camera.ip_address}:{camera.port}/stream"
+        from src.core.services.camera_service import CameraStreamHub
+        raw_url = camera.stream_url or f"rtsp://{camera.ip_address}:{camera.port}/stream"
+        # Normalize: '0','1',… → integer device index string kept as-is for hub
+        stream_url = raw_url.strip()
         stream_status = self.camera_service.test_camera_stream_sync(stream_url)
 
         if not stream_status.get("success"):
@@ -161,7 +164,7 @@ class AIService:
                 stream_status.get("error"),
             )
 
-        run_duration = duration_seconds if duration_seconds is not None else getattr(settings, "CAMERA_ANALYSIS_DURATION_SECONDS", 60)
+        run_duration = duration_seconds if duration_seconds is not None else getattr(settings, "CAMERA_ANALYSIS_DURATION_SECONDS", 15)
         analysis = self.run_stream_analysis_sync(
             stream_url,
             camera.location_id,
@@ -247,8 +250,8 @@ class AIService:
         stream_url: str,
         location_id: int,
         camera_id: int,
-        duration_seconds: int = 60,
-        frame_skip: int = 25,
+        duration_seconds: int = 15,
+        frame_skip: int = 10,
     ) -> Dict[str, Any]:
         """Streamni interval bilan ketma-ket tahlil qiladi."""
         frame_idx = 0

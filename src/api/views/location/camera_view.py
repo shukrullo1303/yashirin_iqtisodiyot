@@ -1,4 +1,3 @@
-import io
 import ssl
 import time
 import urllib.request
@@ -13,65 +12,53 @@ from typing import Optional
 import logging
 
 from src.core.services.camera_service import CameraService
-from src.core.services.face_recognition_service import FaceRecognitionService
 
 logger = logging.getLogger(__name__)
 
-def _is_http_stream_url(url: str) -> bool:
-    return url.lower().startswith('http://') or url.lower().startswith('https://')
+_INITIAL_FRAME_TIMEOUT = 12   # seconds to wait for first frame
+_FRAME_IDLE_TIMEOUT = 20      # seconds of silence before closing stream
+_ANNOTATE_EVERY_N = 10        # run face annotation every N-th frame (~2.5fps at 25fps)
 
 
-def _http_stream_url_candidates(url: str):
-    candidates = [url]
-    if not _is_http_stream_url(url):
-        return candidates
-
-    parsed = urllib.parse.urlparse(url)
-    path = parsed.path or ''
-    if path.endswith('/video'):
-        candidates.append(urllib.parse.urlunparse(parsed._replace(path=path + '.mjpg')))
-        candidates.append(urllib.parse.urlunparse(parsed._replace(path=path[:-len('/video')] + '/video.mjpg')))
-    elif path.endswith('/video.mjpg'):
-        pass
-    else:
-        candidates.append(url.rstrip('/') + '/video.mjpg')
-
-    return list(dict.fromkeys(candidates))
+def _normalize_url(url: str) -> str:
+    """'webcam', 'demo', 'test', '0', '1' → device index string. Else keep as-is."""
+    s = url.strip()
+    if s.lower() in ('webcam', 'demo', 'test'):
+        return '0'
+    return s
 
 
-def _generate_mjpeg_from_http(url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (compatible; CameraProbe/1.0)',
-        'Accept': 'multipart/x-mixed-replace, image/jpeg, */*',
-    }
-
-    for candidate in _http_stream_url_candidates(url):
-        request = urllib.request.Request(candidate, headers=headers)
-        context = ssl.create_default_context()
-
-        try:
-            with urllib.request.urlopen(request, timeout=5, context=context) as response:
-                content_type = response.getheader('Content-Type', '') or ''
-                if 'text/html' in content_type.lower():
-                    logger.debug('HTTP MJPEG candidate returned HTML: %s', candidate)
-                    continue
-
-                buffer = b''
-                while True:
-                    chunk = response.read(4096)
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    start = buffer.find(b'\xff\xd8')
-                    end = buffer.find(b'\xff\xd9', start + 2)
-                    if start != -1 and end != -1:
-                        frame_bytes = buffer[start:end + 2]
-                        buffer = buffer[end + 2:]
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        except Exception as exc:
-            logger.warning('HTTP MJPEG fallback failed for %s: %s', candidate, exc)
-            continue
+def _annotate_frame(frame, location_id: int = 0):
+    """Draw face bboxes/labels on a frame using FaceRecognitionService."""
+    try:
+        from src.core.services.face_recognition_service import FaceRecognitionService
+        fr = FaceRecognitionService()
+        detections = fr.detect_faces(frame)
+        for det in detections[:10]:
+            try:
+                x1, y1, x2, y2 = det.get("bbox") or [0, 0, 0, 0]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = max(0, x2), max(0, y2)
+                crop = frame[y1:y2, x1:x2]
+                rec = fr.recognize_face_sync(crop, location_id=location_id) if (crop is not None and crop.size > 0) else {}
+                if rec and rec.get("is_employee"):
+                    label = rec.get("employee_name") or "employee"
+                    color = (0, 200, 0)
+                elif rec and rec.get("is_unregistered"):
+                    label = "unknown"
+                    color = (0, 140, 255)
+                else:
+                    label = "face"
+                    color = (0, 255, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, max(15, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+            except Exception as exc:
+                logger.debug("Annotate bbox failed: %s", exc)
+    except Exception as exc:
+        logger.debug("Annotate frame failed: %s", exc)
+    return frame
 
 
 def _capture_snapshot(stream_url: str, timeout: int = 5) -> Optional[bytes]:
@@ -80,78 +67,79 @@ def _capture_snapshot(stream_url: str, timeout: int = 5) -> Optional[bytes]:
     if not result.get('success'):
         logger.warning('Snapshot capture failed for %s: %s', stream_url, result.get('error'))
         return None
-
     frame = result.get('frame')
     if frame is None:
         return None
-
-    success, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    if not success:
-        return None
-    return jpeg.tobytes()
+    success, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return jpeg.tobytes() if success else None
 
 
-def _annotate_frame(frame, location_id: int = 0):
-    """Kadrga yuz bbox/label chizadi (real-time ko‘rish uchun)."""
-    if frame is None:
-        return frame
+def generate_mjpeg_stream(url: str, annotate: bool = False, location_id: int = 0):
+    """
+    MJPEG generator with timeout and optional face-annotation overlay.
 
-    fr = FaceRecognitionService()
-    detections = fr.detect_faces(frame)
-    for det in detections[:10]:
-        try:
-            x1, y1, x2, y2 = det.get("bbox") or [0, 0, 0, 0]
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = max(0, x2), max(0, y2)
-            crop = frame[y1:y2, x1:x2]
-            rec = fr.recognize_face_sync(crop, location_id=location_id) if crop is not None and crop.size else {}
-            label = "face"
-            color = (0, 255, 255)
-            if rec and rec.get("is_employee"):
-                label = rec.get("employee_name") or "employee"
-                color = (0, 200, 0)
-            elif rec and rec.get("is_unregistered"):
-                label = "unknown"
-                color = (0, 140, 255)
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                frame,
-                str(label),
-                (x1, max(15, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                2,
-                cv2.LINE_AA,
-            )
-        except Exception as exc:
-            logger.debug("Annotate frame failed: %s", exc)
-            continue
-
-    return frame
-
-
-def generate_mjpeg_stream(url):
-    """Kameradan kadrlarni o'qib, MJPEG generatorini hosil qiladi"""
+    - Closes stream if no first frame within _INITIAL_FRAME_TIMEOUT seconds.
+    - Closes stream if no frame for _FRAME_IDLE_TIMEOUT seconds (camera went offline).
+    - When annotate=True, runs face detection every _ANNOTATE_EVERY_N frames.
+    """
     camera_service = CameraService()
     hub = camera_service.get_stream_hub(url)
-    hub.start(persistent=True)
-    yield from hub.mjpeg_generator()
+    hub.add_reference()
+
+    start_time = time.time()
+    last_frame_time = time.time()
+    got_first_frame = False
+    frame_count = 0
+    boundary = b'--frame\r\n'
+
+    try:
+        while True:
+            if annotate:
+                raw_frame = hub.get_frame(timeout=1)
+                frame_bytes = None
+                if raw_frame is not None:
+                    if frame_count % _ANNOTATE_EVERY_N == 0:
+                        raw_frame = _annotate_frame(raw_frame.copy(), location_id=location_id)
+                    ok, jpeg = cv2.imencode('.jpg', raw_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    frame_bytes = jpeg.tobytes() if ok else None
+            else:
+                frame_bytes = hub.get_frame_bytes(timeout=1)
+
+            if frame_bytes:
+                got_first_frame = True
+                last_frame_time = time.time()
+                frame_count += 1
+                yield (boundary + b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(0.04)  # ~25 fps cap
+                continue
+
+            now = time.time()
+            if not got_first_frame and (now - start_time) > _INITIAL_FRAME_TIMEOUT:
+                logger.info('MJPEG: no first frame in %ds for %s — closing', _INITIAL_FRAME_TIMEOUT, url)
+                return
+            if got_first_frame and (now - last_frame_time) > _FRAME_IDLE_TIMEOUT:
+                logger.info('MJPEG: idle for %ds for %s — closing', _FRAME_IDLE_TIMEOUT, url)
+                return
+
+            time.sleep(0.05)
+    finally:
+        hub.release_reference()
 
 
 @api_view(['GET'])
 def camera_stream_snapshot_view(request):
-    """Kameraning hozirgi kadr snapshotini qaytaradi"""
+    """Single JPEG snapshot (optionally with face-annotation overlay)."""
     stream_url = request.GET.get('url')
+    if not stream_url:
+        return Response({'detail': 'Stream URL kiritilmagan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    stream_url = _normalize_url(stream_url)
     annotated = request.GET.get('annotated') in ('1', 'true', 'True')
+
     try:
         location_id = int(request.GET.get('location_id') or 0)
     except Exception:
         location_id = 0
-    if not stream_url:
-        return Response({'detail': 'Stream URL kiritilmagan.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if not annotated:
         snapshot = _capture_snapshot(stream_url, timeout=5)
@@ -164,22 +152,33 @@ def camera_stream_snapshot_view(request):
     if not result.get('success') or result.get('frame') is None:
         return Response({'detail': 'Kameradan kadr olinmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    frame = _annotate_frame(result['frame'], location_id=location_id)
-    success, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    if not success:
+    frame = _annotate_frame(result['frame'].copy(), location_id=location_id)
+    ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    if not ok:
         return Response({'detail': 'Rasm kodlanmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     return HttpResponse(jpeg.tobytes(), content_type='image/jpeg')
 
 
 @api_view(['GET'])
 def camera_stream_view(request):
-    """Frontend <img> tegi ulanadigan API endpoint"""
+    """MJPEG stream — use as <img src='/api/cameras/stream/?url=...'> in the frontend.
+
+    Optional params:
+      annotated=1        — draw face bbox/labels on every _ANNOTATE_EVERY_N-th frame
+      location_id=<int>  — passed to face recogniser for employee matching
+    """
     stream_url = request.GET.get('url')
     if not stream_url:
-        return StreamingHttpResponse(status=400)
-    
-    return StreamingHttpResponse(
-        generate_mjpeg_stream(stream_url),
-        content_type='multipart/x-mixed-replace; boundary=frame'
-    )
+        return Response({'detail': 'Stream URL kiritilmagan.'}, status=status.HTTP_400_BAD_REQUEST)
 
+    stream_url = _normalize_url(stream_url)
+    annotate = request.GET.get('annotated') in ('1', 'true', 'True')
+    try:
+        location_id = int(request.GET.get('location_id') or 0)
+    except Exception:
+        location_id = 0
+
+    return StreamingHttpResponse(
+        generate_mjpeg_stream(stream_url, annotate=annotate, location_id=location_id),
+        content_type='multipart/x-mixed-replace; boundary=frame',
+    )
