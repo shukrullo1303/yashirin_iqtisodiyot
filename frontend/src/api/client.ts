@@ -60,7 +60,18 @@ apiClient.interceptors.request.use(async (config) => {
 })
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Auto-unwrap DRF paginated responses so components receive plain arrays
+    if (
+      response.data &&
+      typeof response.data === 'object' &&
+      Array.isArray(response.data.results) &&
+      'count' in response.data
+    ) {
+      response.data = response.data.results
+    }
+    return response
+  },
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('auth-storage')

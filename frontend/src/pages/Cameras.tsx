@@ -389,6 +389,27 @@ function Cameras() {
           >
             {analyzeAllLoading ? 'Tahlil...' : 'Aktiv kameralarni parallel tahlil'}
           </Button>
+          <Button
+            variant="outlined"
+            color="secondary"
+            disabled={connectMutation.isLoading}
+            onClick={() => {
+              if (locations.length === 0) {
+                toast.error("Avval location qo'shing")
+                return
+              }
+              connectMutation.mutate({
+                name: 'Demo Webcam',
+                ip_address: '127.0.0.1',
+                port: 0,
+                stream_url: '0',
+                camera_type: 'internal',
+                location: locations[0].id,
+              })
+            }}
+          >
+            Webcam Demo
+          </Button>
           <Button variant="contained" onClick={() => setOpen(true)}>
             Yangi kamera ulash
           </Button>
