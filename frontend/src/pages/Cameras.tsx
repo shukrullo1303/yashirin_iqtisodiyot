@@ -49,6 +49,20 @@ interface LocationOption {
   name: string
 }
 
+interface CameraItem {
+  id: number
+  name: string
+  ip_address: string
+  port: number
+  stream_url?: string
+  camera_type: string
+  camera_type_display?: string
+  location: number
+  location_name?: string
+  is_active: boolean
+  username?: string
+}
+
 interface EmployeeItem {
   id: number
   full_name: string
@@ -149,6 +163,16 @@ function Cameras() {
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editFormData, setEditFormData] = useState({ full_name: '', phone: '', position: '' })
 
+  const [editingCamera, setEditingCamera] = useState<CameraItem | null>(null)
+  const [editCameraOpen, setEditCameraOpen] = useState(false)
+  const [editCameraForm, setEditCameraForm] = useState({
+    name: '',
+    stream_url: '',
+    camera_type: 'internal',
+    port: 80,
+    is_active: true,
+  })
+
   const editEmployeeMutation = useMutation(
     (payload: { id: number; data: Partial<EmployeeItem> }) => apiClient.patch(`employees/${payload.id}/`, payload.data),
     {
@@ -157,6 +181,22 @@ function Cameras() {
         queryClient.invalidateQueries(['employees', locationId])
         setEditDialogOpen(false)
         setEditingEmployee(null)
+      },
+      onError: (error) => {
+        toast.error(extractErrorMessage(error))
+      },
+    }
+  )
+
+  const editCameraMutation = useMutation(
+    (payload: { id: number; data: Partial<CameraItem> }) =>
+      apiClient.patch(`cameras/${payload.id}/`, payload.data),
+    {
+      onSuccess: () => {
+        toast.success("Kamera ma'lumotlari yangilandi")
+        queryClient.invalidateQueries('cameras')
+        setEditCameraOpen(false)
+        setEditingCamera(null)
       },
       onError: (error) => {
         toast.error(extractErrorMessage(error))
@@ -522,7 +562,21 @@ function Cameras() {
                         </Button>
                       )}
                       <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        <IconButton size="small" color="primary">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => {
+                            setEditingCamera(camera as CameraItem)
+                            setEditCameraForm({
+                              name: camera.name || '',
+                              stream_url: camera.stream_url || '',
+                              camera_type: camera.camera_type || 'internal',
+                              port: camera.port || 80,
+                              is_active: Boolean(camera.is_active),
+                            })
+                            setEditCameraOpen(true)
+                          }}
+                        >
                           <Edit />
                         </IconButton>
                         <IconButton
@@ -652,6 +706,78 @@ function Cameras() {
             </Button>
             <Button type="submit" variant="contained" disabled={editEmployeeMutation.isLoading}>
               Saqlash
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* Kamera tahrirlash dialogi */}
+      <Dialog open={editCameraOpen} onClose={() => setEditCameraOpen(false)} fullWidth maxWidth="sm">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!editingCamera) return
+            editCameraMutation.mutate({ id: editingCamera.id, data: editCameraForm })
+          }}
+        >
+          <DialogTitle>Kamerani tahrirlash</DialogTitle>
+          <DialogContent dividers>
+            <Box sx={{ display: 'grid', gap: 2, pt: 1 }}>
+              <TextField
+                label="Kamera nomi"
+                value={editCameraForm.name}
+                onChange={(e) => setEditCameraForm((p) => ({ ...p, name: e.target.value }))}
+                fullWidth
+                required
+              />
+              <TextField
+                label="Stream URL"
+                value={editCameraForm.stream_url}
+                onChange={(e) => setEditCameraForm((p) => ({ ...p, stream_url: e.target.value }))}
+                fullWidth
+                placeholder="rtsp://admin:parol@192.168.1.64:554/..."
+                helperText="RTSP yoki HTTP stream manzili"
+              />
+              <TextField
+                label="Port"
+                type="number"
+                value={editCameraForm.port}
+                onChange={(e) => setEditCameraForm((p) => ({ ...p, port: Number(e.target.value) }))}
+                fullWidth
+              />
+              <TextField
+                label="Kamera turi"
+                select
+                value={editCameraForm.camera_type}
+                onChange={(e) => setEditCameraForm((p) => ({ ...p, camera_type: e.target.value }))}
+                fullWidth
+                SelectProps={{ native: true }}
+              >
+                <option value="entrance">Kirish</option>
+                <option value="exit">Chiqish</option>
+                <option value="internal">Ichki</option>
+              </TextField>
+              <FormControl fullWidth>
+                <InputLabel>Holat</InputLabel>
+                <Select
+                  label="Holat"
+                  value={editCameraForm.is_active ? 'true' : 'false'}
+                  onChange={(e) =>
+                    setEditCameraForm((p) => ({ ...p, is_active: e.target.value === 'true' }))
+                  }
+                >
+                  <MenuItem value="true">Faol</MenuItem>
+                  <MenuItem value="false">Nofaol</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ p: 2 }}>
+            <Button onClick={() => setEditCameraOpen(false)} color="inherit">
+              Bekor qilish
+            </Button>
+            <Button type="submit" variant="contained" disabled={editCameraMutation.isLoading}>
+              {editCameraMutation.isLoading ? 'Saqlanmoqda...' : 'Saqlash'}
             </Button>
           </DialogActions>
         </form>

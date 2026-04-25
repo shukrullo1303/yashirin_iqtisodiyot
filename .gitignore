@@ -9,3 +9,5 @@ dist/
 .vscode/
 .idea/
 .env
+models/*.onnx
+face_snapshots/
