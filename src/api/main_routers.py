@@ -19,7 +19,9 @@ from src.api.views.location.location import LocationViewSet
 from src.api.views.integration.tax_integration import TaxIntegrationViewSet
 from src.api.views.integration.kkt_integration import KKTIntegrationViewSet
 from src.api.views.work_log import WorkLogViewSet
-
+from src.api.views.cafe.cafe_views import MenuCategoryViewSet, MenuItemViewSet, TableViewSet, OrderViewSet, InventoryItemViewSet
+from src.api.views.cafe.staff_views import StaffViewSet
+from src.api.views.cafe.analytics_views import CafeAnalyticsView
 
 
 router = DefaultRouter()
@@ -33,6 +35,12 @@ router.register(r"risk-scores", RiskScoreViewSet, basename="risk-scores")
 router.register(r"heatmaps", HeatmapViewSet, basename="heatmaps")
 router.register(r"tax-integrations", TaxIntegrationViewSet, basename="tax-integrations")
 router.register(r"kkt-integrations", KKTIntegrationViewSet, basename="kkt-integrations")
+router.register(r"cafe/menu-categories", MenuCategoryViewSet, basename="menu-categories")
+router.register(r"cafe/menu-items", MenuItemViewSet, basename="menu-items")
+router.register(r"cafe/tables", TableViewSet, basename="cafe-tables")
+router.register(r"cafe/orders", OrderViewSet, basename="cafe-orders")
+router.register(r"cafe/staff", StaffViewSet, basename="cafe-staff")
+router.register(r"cafe/inventory", InventoryItemViewSet, basename="cafe-inventory")
 
 
 urlpatterns = [
@@ -48,5 +56,6 @@ urlpatterns = [
     path("auth/me/", CurrentUserAPIView.as_view(), name="auth-me"),
     path("drf-auth/", include("rest_framework.urls")),
     path("dashboard/stats/", DashboardStatsView.as_view(), name="dashboard-stats"),
+    path("cafe/analytics/", CafeAnalyticsView.as_view(), name="cafe-analytics"),
 ]
 

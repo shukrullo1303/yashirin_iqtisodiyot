@@ -5,7 +5,20 @@
       "Bash(pkill -f \"vite\")",
       "Bash(npm run:*)",
       "Bash(git fetch:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(dir \"C:\\\\Users\\\\User\\\\Desktop\\\\yashirin_django\\\\frontend\\\\src\\\\pages\" /s /b)",
+      "Bash(xargs cat *)",
+      "Bash(npx tsc *)",
+      "Bash(python manage.py makemigrations --name cafe_and_roles)",
+      "Bash(python manage.py migrate)",
+      "Bash(python manage.py check)",
+      "PowerShell(\"Done\")",
+      "Bash(python manage.py showmigrations core)",
+      "Bash(python manage.py makemigrations --name order_delivery_fields)",
+      "Bash(grep -rn \"raise NotImplementedError\\\\|pass$\" \"C:/Users/User/Desktop/yashirin_django/src/core/services\")",
+      "Bash(USE_SQLITE=1 python manage.py download_models --help)",
+      "Bash(USE_SQLITE=1 python manage.py check)",
+      "Bash(python manage.py makemigrations --name add_kitchen_role)"
     ]
   }
 }

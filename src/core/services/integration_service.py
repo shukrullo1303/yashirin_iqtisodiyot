@@ -17,19 +17,21 @@ class IntegrationService:
     
     def __init__(self):
         """HTTP клиентларни инициализация қилиш"""
-        # Тўғридан-тўғри settings дан олиш хавфсизликни таъминлайди
-        headers_tax = {"Authorization": f"Bearer {settings.TAX_API_KEY}"}
-        headers_mygov = {"Authorization": f"Bearer {settings.MYGOV_API_KEY}"}
-        headers_kkt = {"Authorization": f"Bearer {settings.KKT_API_KEY}"}
+        tax_key = getattr(settings, 'TAX_API_KEY', '')
+        tax_url = getattr(settings, 'TAX_API_URL', 'http://localhost')
+        mygov_key = getattr(settings, 'MYGOV_API_KEY', '')
+        mygov_url = getattr(settings, 'MYGOV_API_URL', 'http://localhost')
+        kkt_key = getattr(settings, 'KKT_API_KEY', '')
+        kkt_url = getattr(settings, 'KKT_API_URL', 'http://localhost')
 
         self.tax_client = httpx.AsyncClient(
-            base_url=settings.TAX_API_URL, headers=headers_tax, timeout=30.0
+            base_url=tax_url, headers={"Authorization": f"Bearer {tax_key}"}, timeout=30.0
         )
         self.mygov_client = httpx.AsyncClient(
-            base_url=settings.MYGOV_API_URL, headers=headers_mygov, timeout=30.0
+            base_url=mygov_url, headers={"Authorization": f"Bearer {mygov_key}"}, timeout=30.0
         )
         self.kkt_client = httpx.AsyncClient(
-            base_url=settings.KKT_API_URL, headers=headers_kkt, timeout=30.0
+            base_url=kkt_url, headers={"Authorization": f"Bearer {kkt_key}"}, timeout=30.0
         )
         logger.info("Integration сервис (Django) муваффақиятли ишга тушди")
 

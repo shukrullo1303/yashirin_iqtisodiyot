@@ -1,4 +1,6 @@
-* {
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
+
+*, *::before, *::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
@@ -20,3 +22,27 @@ code {
 #root {
   min-height: 100vh;
 }
+
+/* ── CAFE CRM Dark Roast Theme ─────────────────────────────────────────────── */
+.cafe-root {
+  --bg:       #0d0905;
+  --surface:  #1a1008;
+  --card:     #251609;
+  --card2:    #2e1d0f;
+  --border:   #3a2818;
+  --accent:   #c8601a;
+  --gold:     #e4a41a;
+  --text:     #f4e4d0;
+  --subtext:  #987060;
+  --success:  #2a9660;
+  --danger:   #d04040;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Nunito', sans-serif;
+  min-height: 100vh;
+}
+
+.cafe-root ::-webkit-scrollbar { width: 4px; height: 4px; }
+.cafe-root ::-webkit-scrollbar-track { background: transparent; }
+.cafe-root ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.cafe-root button:focus { outline: none; }

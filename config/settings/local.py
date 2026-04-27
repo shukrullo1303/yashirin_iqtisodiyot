@@ -104,6 +104,19 @@ DATABASES = {
 
 AUTH_USER_MODEL = 'core.User'
 
+# Integration API keys (set real values in production via env vars or secrets)
+TAX_API_KEY = os.environ.get('TAX_API_KEY', '')
+TAX_API_URL = os.environ.get('TAX_API_URL', 'http://localhost')
+MYGOV_API_KEY = os.environ.get('MYGOV_API_KEY', '')
+MYGOV_API_URL = os.environ.get('MYGOV_API_URL', 'http://localhost')
+KKT_API_KEY = os.environ.get('KKT_API_KEY', '')
+KKT_API_URL = os.environ.get('KKT_API_URL', 'http://localhost')
+
+# ONNX model paths (auto-downloaded on first use for YuNet/SFace; YOLOv8n needs manual download or run_models command)
+import pathlib as _pathlib
+OPENCV_MODELS_DIR = str(_pathlib.Path(BASE_DIR) / 'models')
+PERSON_DETECTION_MODEL = str(_pathlib.Path(BASE_DIR) / 'models' / 'yolov8n.onnx')
+
 # AI analysis: run for 15 seconds per request (was 60s — too slow for HTTP)
 CAMERA_ANALYSIS_DURATION_SECONDS = 15
 

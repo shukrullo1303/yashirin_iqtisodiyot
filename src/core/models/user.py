@@ -9,7 +9,10 @@ class User(AbstractUser):
         ('admin', 'Admin'),
         ('tax_inspector', 'Soliq inspektori'),
         ('analyst', 'Analitik'),
-        ('business_owner', 'Tadbirkor'),
+        ('business_owner', 'Biznes egasi'),
+        ('cafe_manager', 'Cafe menejer'),
+        ('waiter', 'Ofitsiant'),
+        ('kitchen', 'Oshpaz'),
     ]
 
     # Django-ning tayyor maydonlari (username, email, password, is_active, is_superuser, last_login) 

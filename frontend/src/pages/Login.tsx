@@ -18,18 +18,27 @@ const getErrorMessage = (error: any) => {
   return error?.message || 'Xatolik yuz berdi'
 }
 
+function getRoleRedirect(role: string, isSuperuser: boolean) {
+  if (isSuperuser || role === 'admin' || role === 'analyst' || role === 'tax_inspector') return '/'
+  if (role === 'business_owner') return '/owner'
+  if (role === 'cafe_manager') return '/cafe/manager'
+  if (role === 'waiter') return '/cafe/waiter'
+  return '/'
+}
+
 function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login, isAuthenticated, isLoading } = useAuthStore()
+  const { login, isAuthenticated, isLoading, user } = useAuthStore()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (!isLoading && isAuthenticated) {
-      navigate('/', { replace: true })
+    if (!isLoading && isAuthenticated && user) {
+      const redirect = getRoleRedirect(user.role || '', (user as any)?.is_superuser || false)
+      navigate(redirect, { replace: true })
     }
-  }, [isAuthenticated, isLoading, navigate])
+  }, [isAuthenticated, isLoading, user, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -38,7 +47,9 @@ function Login() {
     try {
       await login(username, password)
       toast.success('Muvaffaqiyatli kirildi')
-      navigate('/')
+      const { user } = useAuthStore.getState()
+      const redirect = getRoleRedirect(user?.role || '', (user as any)?.is_superuser || false)
+      navigate(redirect)
     } catch (error: any) {
       toast.error(getErrorMessage(error))
     } finally {

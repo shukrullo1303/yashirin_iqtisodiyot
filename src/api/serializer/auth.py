@@ -16,10 +16,11 @@ class UserSerializer(BaseSerializer):
             "full_name",
             "role",
             "is_active",
+            "is_superuser",
             "date_joined",
             "updated_at",
         )
-        read_only_fields = ("id", "date_joined", "updated_at")
+        read_only_fields = ("id", "is_superuser", "date_joined", "updated_at")
 
 
 class RegisterSerializer(serializers.ModelSerializer):
