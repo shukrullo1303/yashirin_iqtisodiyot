@@ -7,6 +7,8 @@ from src.api.serializer.base import BaseSerializer, models
 
 
 class UserSerializer(BaseSerializer):
+    location_name = serializers.SerializerMethodField()
+
     class Meta:
         model = models.User
         fields = (
@@ -15,6 +17,8 @@ class UserSerializer(BaseSerializer):
             "email",
             "full_name",
             "role",
+            "location",
+            "location_name",
             "is_active",
             "is_superuser",
             "date_joined",
@@ -22,13 +26,16 @@ class UserSerializer(BaseSerializer):
         )
         read_only_fields = ("id", "is_superuser", "date_joined", "updated_at")
 
+    def get_location_name(self, obj):
+        return obj.location.name if obj.location else None
+
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
 
     class Meta:
         model = models.User
-        fields = ("id", "username", "email", "full_name", "role", "password")
+        fields = ("id", "username", "email", "full_name", "role", "location", "password")
         read_only_fields = ("id",)
 
     def validate_email(self, value):

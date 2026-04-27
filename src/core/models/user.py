@@ -20,13 +20,20 @@ class User(AbstractUser):
     
     full_name = models.CharField(max_length=255, verbose_name="Ф.И.Ш.")
     role = models.CharField(
-        max_length=50, 
-        choices=ROLE_CHOICES, 
+        max_length=50,
+        choices=ROLE_CHOICES,
         default='analyst',
         verbose_name="Roll"
     )
-    
-    # created_at va updated_at uchun
+    location = models.ForeignKey(
+        'core.Location',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='staff',
+        verbose_name="Lokatsiya"
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
     # created_at o'rniga Django-ning tayyor date_joined maydonidan foydalanish ham mumkin
 

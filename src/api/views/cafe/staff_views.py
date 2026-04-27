@@ -13,10 +13,15 @@ class StaffViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
+        user = self.request.user
         qs = User.objects.filter(role__in=('waiter', 'cafe_manager', 'kitchen'))
-        if not (self.request.user.is_superuser or self.request.user.role in ('admin', 'business_owner')):
-            # Cafe manager faqat waiter va cafe_manager ko'radi
-            pass
+        if user.is_superuser or user.role == 'admin':
+            loc = self.request.query_params.get('location_id')
+            if loc:
+                qs = qs.filter(location_id=loc)
+        elif user.role == 'business_owner':
+            if user.location_id:
+                qs = qs.filter(location_id=user.location_id)
         return qs.order_by('full_name')
 
     def get_serializer_class(self):
@@ -27,7 +32,13 @@ class StaffViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not (request.user.is_superuser or request.user.role in ('admin', 'business_owner', 'cafe_manager')):
             return Response({'detail': 'Ruxsat yo\'q'}, status=403)
-        return super().create(request, *args, **kwargs)
+        data = request.data.copy()
+        if 'location' not in data and request.user.role == 'business_owner' and request.user.location_id:
+            data['location'] = request.user.location_id
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=201)
 
     def update(self, request, *args, **kwargs):
         if not (request.user.is_superuser or request.user.role in ('admin', 'business_owner', 'cafe_manager')):

@@ -74,7 +74,7 @@ class InventoryItemSerializer(serializers.ModelSerializer):
 class StaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'full_name', 'role', 'is_active', 'date_joined']
+        fields = ['id', 'username', 'full_name', 'role', 'location', 'is_active', 'date_joined']
         read_only_fields = ['id', 'date_joined']
 
 
@@ -83,7 +83,7 @@ class StaffCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'full_name', 'role', 'is_active', 'password']
+        fields = ['id', 'username', 'full_name', 'role', 'location', 'is_active', 'password']
 
     def validate_role(self, value):
         if value not in ('waiter', 'cafe_manager', 'kitchen'):

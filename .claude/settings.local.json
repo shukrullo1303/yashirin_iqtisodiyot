@@ -18,7 +18,12 @@
       "Bash(grep -rn \"raise NotImplementedError\\\\|pass$\" \"C:/Users/User/Desktop/yashirin_django/src/core/services\")",
       "Bash(USE_SQLITE=1 python manage.py download_models --help)",
       "Bash(USE_SQLITE=1 python manage.py check)",
-      "Bash(python manage.py makemigrations --name add_kitchen_role)"
+      "Bash(python manage.py makemigrations --name add_kitchen_role)",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py showmigrations core --settings=config.settings.local)",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py shell --settings=config.settings.local -c ' *)",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py makemigrations core --settings=config.settings.local -n \"user_location\")",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py migrate --settings=config.settings.local)",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py check --settings=config.settings.local)"
     ]
   }
 }

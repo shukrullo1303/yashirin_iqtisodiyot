@@ -22,6 +22,7 @@ from src.api.views.work_log import WorkLogViewSet
 from src.api.views.cafe.cafe_views import MenuCategoryViewSet, MenuItemViewSet, TableViewSet, OrderViewSet, InventoryItemViewSet
 from src.api.views.cafe.staff_views import StaffViewSet
 from src.api.views.cafe.analytics_views import CafeAnalyticsView
+from src.api.views.auth.boss_views import BossViewSet
 
 
 router = DefaultRouter()
@@ -40,6 +41,7 @@ router.register(r"cafe/menu-items", MenuItemViewSet, basename="menu-items")
 router.register(r"cafe/tables", TableViewSet, basename="cafe-tables")
 router.register(r"cafe/orders", OrderViewSet, basename="cafe-orders")
 router.register(r"cafe/staff", StaffViewSet, basename="cafe-staff")
+router.register(r"bosses", BossViewSet, basename="bosses")
 router.register(r"cafe/inventory", InventoryItemViewSet, basename="cafe-inventory")
 
 
