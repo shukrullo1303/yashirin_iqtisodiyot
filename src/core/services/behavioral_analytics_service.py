@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class BehavioralAnalyticsService:
-    """Navbat va odam oqimi bo‘yicha sodda behavior analytics servisi."""
+    """Navbat va odam oqimi bo'yicha sodda behavioral analytics servisi."""
 
     def __init__(self):
         self.cache_timeout = 7200
@@ -48,9 +48,16 @@ class BehavioralAnalyticsService:
                     cache.set(cache_key, timestamp.isoformat(), self.cache_timeout)
                     continue
 
-                enter_time = datetime.fromisoformat(enter_time_str)
-                duration = max(0.0, (timestamp - enter_time).total_seconds() / 60)
-                stay_times.append(duration)
+                # Handle both string and datetime objects
+                if isinstance(enter_time_str, str):
+                    enter_time = datetime.fromisoformat(enter_time_str.replace("Z", "+00:00"))
+                    # Make timestamp timezone-aware if enter_time is timezone-aware
+                    if enter_time.tzinfo is not None and timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=enter_time.tzinfo)
+                    elif enter_time.tzinfo is None and timestamp.tzinfo is not None:
+                        enter_time = enter_time.replace(tzinfo=timestamp.tzinfo)
+                    duration = max(0.0, (timestamp - enter_time).total_seconds() / 60)
+                    stay_times.append(duration)
 
             stats = {
                 "avg_stay": float(np.mean(stay_times)) if stay_times else 0.0,
@@ -70,9 +77,19 @@ class BehavioralAnalyticsService:
             logger.error("Behavior analysis error: %s", exc, exc_info=True)
             return {"error": str(exc)}
 
-    def _save_snapshot(self, location_id: int, queue: int, stats: Dict[str, float], ts: datetime):
+    def _save_snapshot(
+        self,
+        location_id: int,
+        queue: int,
+        stats: Dict[str, float],
+        ts: datetime
+    ):
         """Mavjud Analytics modeliga mos holda qisqa snapshot saqlaydi."""
         record_time = ts.replace(second=0, microsecond=0)
+
+        # Get date part for proper lookup
+        record_date = record_time.date() if hasattr(record_time, 'date') else record_time
+
         defaults = {
             "real_customers": queue,
             "reported_revenue": 0.0,
@@ -82,20 +99,29 @@ class BehavioralAnalyticsService:
             "discrepancy_percentage": 0.0,
         }
 
-        analytics, created = Analytics.objects.get_or_create(
+        # Use date lookup instead of exact datetime
+        analytics = Analytics.objects.filter(
             location_id=location_id,
-            date=record_time,
-            defaults=defaults,
-        )
-        if not created:
+            date__date=record_date,
+        ).order_by('-date').first()
+
+        if analytics is None:
+            analytics = Analytics.objects.create(
+                location_id=location_id,
+                date=record_time,
+                **defaults,
+            )
+        else:
             analytics.real_customers = max(analytics.real_customers, queue)
-            analytics.estimated_revenue = max(analytics.estimated_revenue, defaults["estimated_revenue"])
+            analytics.estimated_revenue = max(
+                analytics.estimated_revenue, defaults["estimated_revenue"]
+            )
             if not analytics.average_check and queue:
                 analytics.average_check = defaults["average_check"]
             analytics.save(update_fields=["real_customers", "estimated_revenue", "average_check", "updated_at"])
 
     def get_peak_hours_report(self, location_id: int, days: int = 7) -> Dict[str, Any]:
-        """Oxirgi kunlar bo‘yicha peak hour hisobotini qaytaradi."""
+        """Oxirgi kunlar bo'yicha peak hour hisobotini qaytaradi."""
         start_date = timezone.now() - timedelta(days=days)
         hourly_data = Analytics.objects.filter(
             location_id=location_id,
@@ -109,11 +135,15 @@ class BehavioralAnalyticsService:
                 continue
             hour_totals[hour] = hour_totals.get(hour, 0) + int(row.get("real_customers") or 0)
 
-        peak_hours = [hour for hour, _ in sorted(hour_totals.items(), key=lambda item: item[1], reverse=True)[:5]]
+        peak_hours = [
+            hour for hour, _ in sorted(
+                hour_totals.items(), key=lambda item: item[1], reverse=True
+            )[:5]
+        ]
 
         return {
             "location_id": location_id,
             "report_period": f"{days} days",
             "peak_hours": peak_hours,
-            "recommendation": "Pik soatlarda ko‘proq xodim ajrating.",
+            "recommendation": "Pik soatlarda ko'proq xodim ajrating.",
         }

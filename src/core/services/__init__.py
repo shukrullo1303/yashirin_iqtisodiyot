@@ -17,4 +17,5 @@ __all__ = [
     "VideoAnalyticsService",
     "CameraService",
     "IntegrationService",
+    "FaceDetectionVisualizationService",
 ]

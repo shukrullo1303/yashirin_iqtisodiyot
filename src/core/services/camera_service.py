@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 _STREAM_HUBS_LOCK = threading.Lock()
 _STREAM_HUBS: Dict[str, "CameraStreamHub"] = {}
 
+
 def _is_youtube_url(url: str) -> bool:
+    """YouTube URL'ini aniqlash."""
     if not url:
         return False
     u = url.lower()
@@ -33,7 +35,7 @@ def _is_youtube_url(url: str) -> bool:
 
 def _resolve_youtube_stream_url(url: str, cache_ttl_seconds: int = 10 * 60) -> str:
     """
-    YouTube havolasini OpenCV o‘qiy oladigan direct stream URL ga aylantiradi.
+    YouTube havolasini OpenCV o'qiy oladigan direct stream URL ga aylantiradi.
     URL'lar tez eskiradi, shuning uchun qisqa TTL bilan kesh qilinadi.
     """
     if not _is_youtube_url(url):
@@ -66,6 +68,7 @@ def _resolve_youtube_stream_url(url: str, cache_ttl_seconds: int = 10 * 60) -> s
 
 
 def _normalize_stream_url(stream_url: str) -> str:
+    """Stream URL'ni normallashtirish."""
     if not stream_url:
         return stream_url
     if _is_youtube_url(stream_url):
@@ -74,6 +77,8 @@ def _normalize_stream_url(stream_url: str) -> str:
 
 
 class CameraStreamHub:
+    """Kamera streamini boshqarish uchun hub."""
+
     def __init__(self, stream_url: str, timeout: int = 5, idle_timeout: int = 30):
         self.stream_url = stream_url
         self.timeout = timeout
@@ -88,8 +93,11 @@ class CameraStreamHub:
         self._thread: Optional[threading.Thread] = None
         self._new_frame = threading.Event()
         self._last_access = time.time()
+        self._error_count = 0
+        self._last_error: Optional[str] = None
 
     def start(self, persistent: bool = True):
+        """Streamni boshlash."""
         with self._lock:
             self._last_access = time.time()
             if self._thread and self._thread.is_alive():
@@ -103,6 +111,7 @@ class CameraStreamHub:
             self._thread.start()
 
     def stop(self):
+        """Streamni to'xtatish."""
         with self._lock:
             self._alive = False
             self._persistent = False
@@ -110,17 +119,20 @@ class CameraStreamHub:
             self._thread.join(timeout=1)
 
     def add_reference(self):
+        """Referens qo'shish."""
         with self._lock:
             self._reference_count += 1
             self._last_access = time.time()
         self.start(persistent=True)
 
     def release_reference(self):
+        """Referensni ozod qilish."""
         with self._lock:
             self._reference_count = max(0, self._reference_count - 1)
             self._last_access = time.time()
 
     def get_frame(self, timeout: int = 5) -> Optional[np.ndarray]:
+        """Kadr olish."""
         self.start()
         got = self._new_frame.wait(timeout)
         if not got:
@@ -130,6 +142,7 @@ class CameraStreamHub:
             return None if self._frame is None else self._frame.copy()
 
     def get_frame_bytes(self, timeout: int = 5) -> Optional[bytes]:
+        """Kadr baytlarini olish."""
         self.start()
         got = self._new_frame.wait(timeout)
         if not got:
@@ -139,6 +152,7 @@ class CameraStreamHub:
             return self._frame_bytes
 
     def mjpeg_generator(self):
+        """MJPEG formatida kadr berish."""
         self.add_reference()
         try:
             boundary = b'--frame\r\n'
@@ -158,6 +172,7 @@ class CameraStreamHub:
             self.release_reference()
 
     def _set_frame(self, frame: np.ndarray) -> None:
+        """Kadrni saqlash."""
         try:
             success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
             if not success:
@@ -167,6 +182,7 @@ class CameraStreamHub:
                 self._frame_bytes = buffer.tobytes()
                 self._frame_id += 1
                 self._new_frame.set()
+                self._error_count = 0
         except Exception as exc:
             logger.debug('StreamHub frame encoding failed: %s', exc)
 
@@ -176,7 +192,22 @@ class CameraStreamHub:
         s = stream_url.strip()
         return int(s) if s.isdigit() else stream_url
 
+    def get_status(self) -> Dict[str, Any]:
+        """Hub holatini qaytarish."""
+        with self._lock:
+            return {
+                "stream_url": self.stream_url,
+                "alive": self._alive,
+                "persistent": self._persistent,
+                "reference_count": self._reference_count,
+                "frame_id": self._frame_id,
+                "error_count": self._error_count,
+                "last_error": self._last_error,
+                "last_access": self._last_access,
+            }
+
     def _run(self):
+        """Streamni o'qish uchun asosiy tsikl."""
         cap = None
         failure_delay = 0.2
         cv2_source = self._cv2_source(self.stream_url)
@@ -184,7 +215,11 @@ class CameraStreamHub:
             try:
                 with self._lock:
                     alive = self._alive
-                    idle = self._reference_count <= 0 and not self._persistent and (time.time() - self._last_access) > self.idle_timeout
+                    idle = (
+                        self._reference_count <= 0
+                        and not self._persistent
+                        and (time.time() - self._last_access) > self.idle_timeout
+                    )
                 if not alive or idle:
                     break
 
@@ -206,20 +241,33 @@ class CameraStreamHub:
                     cap.release()
                     cap = None
                     failure_delay = min(1.0, failure_delay + 0.1)
+                    self._error_count += 1
+                    self._last_error = "Failed to read frame from capture"
 
-                is_http = not self.stream_url.strip().isdigit() and (
-                    self.stream_url.lower().startswith('http://') or self.stream_url.lower().startswith('https://')
+                is_http = (
+                    not self.stream_url.strip().isdigit()
+                    and (
+                        self.stream_url.lower().startswith('http://')
+                        or self.stream_url.lower().startswith('https://')
+                    )
                 )
                 if is_http:
-                    result = CameraService()._capture_http_frame(self.stream_url, timeout=self.timeout)
+                    result = CameraService()._capture_http_frame(
+                        self.stream_url, timeout=self.timeout
+                    )
                     if result.get('success') and result.get('frame') is not None:
                         self._set_frame(result['frame'])
                         failure_delay = 0.1
                         continue
+                    else:
+                        self._error_count += 1
+                        self._last_error = result.get('error', 'HTTP capture failed')
 
                 time.sleep(max(0.5, failure_delay))
             except Exception as exc:
                 logger.warning('StreamHub error for %s: %s', self.stream_url, exc, exc_info=True)
+                self._error_count += 1
+                self._last_error = str(exc)
                 if cap is not None:
                     cap.release()
                     cap = None
@@ -231,6 +279,7 @@ class CameraStreamHub:
 
 
 def _get_stream_hub(stream_url: str) -> CameraStreamHub:
+    """Stream hub olish yoki yaratish."""
     stream_url = _normalize_stream_url(stream_url)
     with _STREAM_HUBS_LOCK:
         hub = _STREAM_HUBS.get(stream_url)
@@ -241,6 +290,7 @@ def _get_stream_hub(stream_url: str) -> CameraStreamHub:
 
 
 def _release_stream_hub(stream_url: str) -> None:
+    """Stream hubni ozod qilish."""
     with _STREAM_HUBS_LOCK:
         hub = _STREAM_HUBS.get(stream_url)
         if hub is None:
@@ -267,7 +317,7 @@ class CameraService:
         if ONVIFCamera is None:
             return {
                 "success": False,
-                "error": "onvif paketi o‘rnatilmagan. RTSP stream URL orqali ishlatish mumkin.",
+                "error": "onvif paketi o'rnatilmagan. RTSP stream URL orqali ishlatish mumkin.",
             }
 
         try:
@@ -310,12 +360,15 @@ class CameraService:
         username: Optional[str] = None,
         password: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Asinxron kamera ulanish."""
         return self.connect_camera_sync(ip_address, port, username, password)
 
     def _is_http_stream_url(self, stream_url: str) -> bool:
+        """HTTP stream URL ekanligini tekshirish."""
         return stream_url.lower().startswith('http://') or stream_url.lower().startswith('https://')
 
     def _http_stream_url_candidates(self, stream_url: str) -> List[str]:
+        """HTTP stream URL variantlarini yaratish."""
         candidates = [stream_url]
         if not self._is_http_stream_url(stream_url):
             return candidates
@@ -348,6 +401,7 @@ class CameraService:
         return list(dict.fromkeys(candidates))
 
     def _capture_http_frame(self, stream_url: str, timeout: int = 5) -> Dict[str, Any]:
+        """HTTP streamdan kadr olish."""
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; CameraProbe/1.0)',
             'Accept': 'multipart/x-mixed-replace, image/jpeg, */*',
@@ -406,6 +460,7 @@ class CameraService:
         return {'success': False, 'error': 'HTTP streamdan kadr olinmadi'}
 
     def _test_http_stream_sync(self, stream_url: str, timeout: int = 5) -> Dict[str, Any]:
+        """HTTP streamni test qilish."""
         result = self._capture_http_frame(stream_url, timeout)
         if result.get('success'):
             return {'success': True, 'status': 'online', 'resolution': result.get('resolution')}
@@ -437,7 +492,7 @@ class CameraService:
                 return {
                     "success": False,
                     "status": "offline",
-                    "error": "Video oqimini ochib bo‘lmadi",
+                    "error": "Video oqimini ochib bo'lmadi",
                 }
 
             ret, frame = cap.read()
@@ -447,7 +502,7 @@ class CameraService:
                 return {
                     "success": False,
                     "status": "offline",
-                    "error": "Kadrni o‘qib bo‘lmadi",
+                    "error": "Kadrni o'qib bo'lmadi",
                 }
 
             height, width = frame.shape[:2]
@@ -464,12 +519,15 @@ class CameraService:
                 cap.release()
 
     async def test_camera_stream(self, stream_url: str, timeout: int = 5) -> Dict[str, Any]:
+        """Asinxron stream test."""
         return self.test_camera_stream_sync(stream_url, timeout)
 
     def get_stream_hub(self, stream_url: str) -> CameraStreamHub:
+        """Stream hub olish."""
         return _get_stream_hub(stream_url)
 
     def start_camera_stream(self, camera: Camera, persistent: bool = True) -> bool:
+        """Kamera streamini boshlash."""
         if not camera or not camera.is_active or not camera.stream_url:
             return False
         hub = self.get_stream_hub(camera.stream_url)
@@ -477,6 +535,7 @@ class CameraService:
         return True
 
     def start_active_camera_streams(self, location_id: Optional[int] = None, persistent: bool = True) -> int:
+        """Aktiv kameralar streamini boshlash."""
         query = Camera.objects.filter(is_active=True).exclude(stream_url__isnull=True).exclude(stream_url__exact='')
         if location_id:
             query = query.filter(location_id=location_id)
@@ -488,6 +547,7 @@ class CameraService:
         return len(stream_urls)
 
     def stop_camera_stream(self, stream_url: str) -> bool:
+        """Kamera streamini to'xtatish."""
         if not stream_url:
             return False
         if Camera.objects.filter(stream_url=stream_url, is_active=True).exists():
@@ -502,7 +562,7 @@ class CameraService:
         return True
 
     def capture_frame(self, stream_url: str, timeout: int = 5) -> Dict[str, Any]:
-        """Streamdan bitta kadr oladi va yagona ulanishni qayta ishlatadi."""
+        """Streamdan bitta kadr oladi va yagona ulanishni qayta ishlashadi."""
         if not stream_url:
             return {"success": False, "error": "Stream URL kiritilmagan"}
 
@@ -521,7 +581,7 @@ class CameraService:
             if not stream_url.strip().isdigit() and self._is_http_stream_url(stream_url):
                 return self._capture_http_frame(stream_url, timeout)
 
-            return {"success": False, "error": "Kamera streamiga ulanib bo’lmadi"}
+            return {"success": False, "error": "Kamera streamiga ulanib bo'lmadi"}
         except Exception as exc:
             logger.error("Frame capture error: %s", exc, exc_info=True)
             return {"success": False, "error": str(exc)}
@@ -550,7 +610,7 @@ class CameraService:
         return results
 
     def get_active_cameras_list(self, location_id: int) -> List[Dict[str, Any]]:
-        """Lokatsiya bo‘yicha faol kameralar ro‘yxatini qaytaradi."""
+        """Lokatsiya bo'yicha faol kameralar ro'yxatini qaytaradi."""
         return list(
             Camera.objects.filter(location_id=location_id, is_active=True).values(
                 "id",
@@ -562,3 +622,29 @@ class CameraService:
                 "resolution",
             )
         )
+
+    def get_all_stream_hubs_status(self) -> Dict[str, Any]:
+        """Barcha stream hublarning holatini qaytarish."""
+        with _STREAM_HUBS_LOCK:
+            hubs_status = {}
+            for url, hub in _STREAM_HUBS.items():
+                hubs_status[url] = hub.get_status()
+            return {
+                "total_hubs": len(hubs_status),
+                "active_hubs": sum(1 for s in hubs_status.values() if s["alive"]),
+                "hubs": hubs_status,
+            }
+
+    def cleanup_inactive_hubs(self) -> int:
+        """Faol bo'lmagan hublarni tozalash."""
+        cleaned = 0
+        with _STREAM_HUBS_LOCK:
+            to_remove = []
+            for url, hub in _STREAM_HUBS.items():
+                status = hub.get_status()
+                if not status["alive"] and status["reference_count"] <= 0:
+                    to_remove.append(url)
+            for url in to_remove:
+                del _STREAM_HUBS[url]
+                cleaned += 1
+        return cleaned
