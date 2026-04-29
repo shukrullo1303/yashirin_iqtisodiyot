@@ -45,7 +45,13 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"http://localhost:3000/\")",
       "Bash(curl -s --max-time 3 -o /tmp/proxy_test.bin \"http://localhost:3000/api/cameras/stream/?url=0\")",
       "Bash(curl -s -o /dev/null -w \"no_auth: %{http_code}\\\\n\" --max-time 2 \"http://localhost:8000/api/cameras/stream/?url=0\")",
-      "Bash(curl -s --max-time 2 -D - \"http://localhost:3000/api/cameras/stream/?url=0\")"
+      "Bash(curl -s --max-time 2 -D - \"http://localhost:3000/api/cameras/stream/?url=0\")",
+      "Bash(pip install *)",
+      "Bash(python -c \"import MetaTrader5; print\\('OK:', MetaTrader5.__version__\\)\")",
+      "Bash(python scalper_mt5.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -u -c ' *)",
+      "Bash(python -W all scalper_mt5.py)"
     ]
   }
 }
