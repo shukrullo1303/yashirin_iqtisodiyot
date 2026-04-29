@@ -23,7 +23,29 @@
       "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py shell --settings=config.settings.local -c ' *)",
       "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py makemigrations core --settings=config.settings.local -n \"user_location\")",
       "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py migrate --settings=config.settings.local)",
-      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py check --settings=config.settings.local)"
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py check --settings=config.settings.local)",
+      "Bash(pkill -f \"runserver\")",
+      "Bash(python /Users/coco/Desktop/yashirin_iqtisodiyot/manage.py runserver 8000 --settings=config.settings.local)",
+      "Bash(curl -s http://127.0.0.1:8000/api/cameras/stream/live-stats/?url=test)",
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)\\)\")",
+      "Bash(curl -s \"http://127.0.0.1:8000/api/cameras/stream/live-stats/?url=test\")",
+      "Bash(/Users/coco/Desktop/yashirin_iqtisodiyot/frontend/node_modules/.bin/tsc --noEmit -p /Users/coco/Desktop/yashirin_iqtisodiyot/frontend/tsconfig.json)",
+      "Bash(python manage.py runserver 8000)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/cameras/stream/live-stats/?url=test)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"http://localhost:8000/api/cameras/stream/live-stats/?url=test\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python manage.py makemigrations core -n tracked_customer --settings=config.settings.local)",
+      "Bash(python manage.py migrate --settings=config.settings.local)",
+      "Bash(python manage.py runserver 8000 --settings=config.settings.local)",
+      "Bash(curl -s \"http://localhost:8000/api/cameras/stream/live-stats/?url=test\")",
+      "Bash(python manage.py shell --settings=config.settings.local -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"http://localhost:8000/api/cameras/stream/?url=0\")",
+      "Bash(kill %1)",
+      "Bash(curl -s --max-time 4 -o /dev/null -w \"status:%{http_code}\" \"http://localhost:8000/api/cameras/stream/?url=0\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" \"http://localhost:3000/\")",
+      "Bash(curl -s --max-time 3 -o /tmp/proxy_test.bin \"http://localhost:3000/api/cameras/stream/?url=0\")",
+      "Bash(curl -s -o /dev/null -w \"no_auth: %{http_code}\\\\n\" --max-time 2 \"http://localhost:8000/api/cameras/stream/?url=0\")",
+      "Bash(curl -s --max-time 2 -D - \"http://localhost:3000/api/cameras/stream/?url=0\")"
     ]
   }
 }

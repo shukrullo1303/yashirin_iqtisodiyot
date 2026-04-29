@@ -16,6 +16,11 @@ from django.db import transaction
 from django.utils import timezone
 
 try:
+    import face_recognition as _dlib_face_recognition  # type: ignore
+except Exception:  # pragma: no cover
+    _dlib_face_recognition = None
+
+try:
     from src.core.utils.encryption import encryption_service
 except Exception:
     class _NoopEncryptionService:
@@ -131,6 +136,8 @@ class FaceRecognitionService:
 
     def __init__(self):
         self.confidence_threshold = getattr(settings, "FACE_RECOGNITION_CONFIDENCE", 0.363)
+        # "auto" | "opencv" | "face_recognition"
+        self.backend = getattr(settings, "FACE_RECOGNITION_BACKEND", "auto")
         self.cache_prefix = "face_encodings_"
         self.presence_cache_prefix = "face_presence_"
         self.employee_presence_threshold = getattr(
@@ -146,8 +153,29 @@ class FaceRecognitionService:
         )
 
         detector, recognizer = _get_opencv_models()
-        backend = "OpenCV YuNet+SFace" if detector else "Haar Cascade (fallback)"
-        logger.info("FaceRecognitionService tayyor. Backend: %s", backend)
+
+        dlib_ok = _dlib_face_recognition is not None
+        opencv_ok = detector is not None and recognizer is not None
+
+        if self.backend == "face_recognition" and not dlib_ok:
+            logger.warning("FACE_RECOGNITION_BACKEND=face_recognition, lekin modul topilmadi. OpenCV/Fallback ishlatiladi.")
+        if self.backend == "opencv" and not opencv_ok:
+            logger.warning("FACE_RECOGNITION_BACKEND=opencv, lekin YuNet+SFace yuklanmadi. Fallback ishlatiladi.")
+
+        chosen = self._choose_backend(opencv_ok=opencv_ok, dlib_ok=dlib_ok)
+        logger.info("FaceRecognitionService tayyor. Backend: %s", chosen)
+
+    def _choose_backend(self, *, opencv_ok: bool, dlib_ok: bool) -> str:
+        if self.backend == "opencv":
+            return "opencv" if opencv_ok else "fallback"
+        if self.backend == "face_recognition":
+            return "face_recognition" if dlib_ok else ("opencv" if opencv_ok else "fallback")
+        # auto
+        if opencv_ok:
+            return "opencv"
+        if dlib_ok:
+            return "face_recognition"
+        return "fallback"
 
     # ------------------------------------------------------------------
     # Yuz aniqlash (Detection)
@@ -159,7 +187,14 @@ class FaceRecognitionService:
             return []
 
         detector, recognizer = _get_opencv_models()
-        if detector is not None and recognizer is not None:
+        dlib_ok = _dlib_face_recognition is not None
+        opencv_ok = detector is not None and recognizer is not None
+        chosen = self._choose_backend(opencv_ok=opencv_ok, dlib_ok=dlib_ok)
+
+        if chosen == "face_recognition" and _dlib_face_recognition is not None:
+            return self._detect_dlib(frame)
+
+        if chosen == "opencv" and detector is not None and recognizer is not None:
             try:
                 faces = _yunet_detect(frame, detector)
                 if faces is None:
@@ -195,6 +230,36 @@ class FaceRecognitionService:
         # Fallback: Haar Cascade
         return self._detect_haar(frame)
 
+    def _detect_dlib(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        """face_recognition (dlib) bilan detection + 128-dim embedding."""
+        try:
+            fr = _dlib_face_recognition
+            if fr is None:
+                return []
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # returns (top, right, bottom, left)
+            boxes = fr.face_locations(rgb, model="hog")
+            if not boxes:
+                return []
+
+            encs = fr.face_encodings(rgb, known_face_locations=boxes)
+            results: List[Dict[str, Any]] = []
+            for (top, right, bottom, left), enc in zip(boxes, encs):
+                x1, y1, x2, y2 = int(left), int(top), int(right), int(bottom)
+                results.append(
+                    {
+                        "bbox": [max(0, x1), max(0, y1), max(0, x2), max(0, y2)],
+                        "confidence": 1.0,
+                        "label": "face",
+                        "embedding": np.asarray(enc, dtype=np.float32).flatten(),
+                    }
+                )
+            return results
+        except Exception as exc:
+            logger.warning("face_recognition detect xatolik: %s", exc)
+            return []
+
     def _detect_haar(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         if self.face_cascade is None or self.face_cascade.empty():
             return []
@@ -221,6 +286,16 @@ class FaceRecognitionService:
 
         try:
             detector, recognizer = _get_opencv_models()
+            dlib_ok = _dlib_face_recognition is not None
+            opencv_ok = detector is not None and recognizer is not None
+            chosen = self._choose_backend(opencv_ok=opencv_ok, dlib_ok=dlib_ok)
+
+            if chosen == "face_recognition" and _dlib_face_recognition is not None:
+                rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+                encs = _dlib_face_recognition.face_encodings(rgb)
+                if encs:
+                    return np.asarray(encs[0], dtype=np.float32).flatten()
+
             if detector is not None and recognizer is not None:
                 faces = _yunet_detect(face_image, detector)
                 if faces is not None and len(faces) > 0:

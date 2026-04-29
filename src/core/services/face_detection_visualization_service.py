@@ -18,22 +18,27 @@ class FaceDetectionVisualizationService:
     """
 
     # Ranglar (BGR format)
-    YELLOW = (0, 255, 255)  # Sariq rang - barcha yuzlar uchun
-    WHITE = (255, 255, 255)  # Oq rang - yozuvlar uchun
-    BLACK = (0, 0, 0)  # Qora rang - fon uchun
-    GREEN = (0, 200, 0)  # Yashil rang - xodimlar uchun
+    YELLOW = (0, 220, 255)   # Sariq - mijozlar
+    BLUE   = (230, 100, 0)   # Ko'k   - xodimlar
+    WHITE  = (255, 255, 255)
+    BLACK  = (0, 0, 0)
+    GREEN  = (0, 200, 0)     # (unused, kept for compatibility)
 
     def __init__(self, location_id: int):
         self.location_id = location_id
 
-        # Mijozlarni hisoblash uchun
-        self._daily_customers: Dict[str, set] = {}  # date_str -> set of signatures
-        self._tracked_faces: Dict[str, Dict[str, Any]] = {}  # signature -> face info
+        # In-memory cache (tez kirish uchun) — DB dan yuklangan
+        self._seen_today: set = set()   # bugungi kun uchun signaturalar seti
+        self._cache_date: str = ''      # qaysi kun uchun yuklangan
+
+        # Oxirgi kadrdan aniqlangan bboxlar — intermediate kadrlarda qayta chizish uchun
+        self._last_face_data: List[Dict[str, Any]] = []
 
         # Face recognition service'ni import qilish
         self._face_service = None
         self._models_loaded = False
         self._try_load_models()
+        self._load_today_from_db()
 
         logger.info(f"FaceDetectionVisualizationService initialized for location {location_id}")
 
@@ -47,6 +52,23 @@ class FaceDetectionVisualizationService:
         except Exception as e:
             logger.warning(f"Could not load face recognition models: {e}")
             self._models_loaded = False
+
+    def _load_today_from_db(self):
+        """Bugungi kuzatilgan mijozlarni DB dan in-memory cache ga yuklash."""
+        today_str = date.today().isoformat()
+        try:
+            from src.core.models.customer import TrackedCustomer
+            sigs = TrackedCustomer.objects.filter(
+                location_id=self.location_id,
+                date_str=today_str,
+            ).values_list('signature', flat=True)
+            self._seen_today = set(sigs)
+            self._cache_date = today_str
+            logger.info(f"Loaded {len(self._seen_today)} tracked customers from DB for {today_str}")
+        except Exception as e:
+            logger.warning(f"Could not load tracked customers from DB: {e}")
+            self._seen_today = set()
+            self._cache_date = today_str
 
     def process_frame(
         self,
@@ -122,17 +144,17 @@ class FaceDetectionVisualizationService:
             })
 
         # 3. Kadrda chizish
+        self._last_face_data = face_data
         annotated_frame = self._draw_face_boxes(frame, face_data)
 
         # 4. Statistika
-        today_str = timestamp.date().isoformat()
         stats = {
             "location_id": location_id,
             "timestamp": timestamp.isoformat(),
             "total_faces": len(face_data),
             "employees_detected": sum(1 for f in face_data if f["is_employee"]),
             "customers_detected": sum(1 for f in face_data if not f["is_employee"]),
-            "daily_customers": len(self._daily_customers.get(today_str, set())),
+            "daily_customers": self.get_daily_customers(timestamp.date().isoformat()),
         }
 
         # 5. Statistika yozuvini kadr ustiga qo'shish
@@ -186,6 +208,12 @@ class FaceDetectionVisualizationService:
                 pass
         return None
 
+    def draw_cached_boxes(self, frame: np.ndarray) -> np.ndarray:
+        """Oxirgi aniqlangan bboxlarni yangi kadrga chizish (qayta detection qilmasdan)."""
+        if not self._last_face_data:
+            return frame
+        return self._draw_face_boxes(frame, self._last_face_data)
+
     def _draw_face_boxes(
         self,
         frame: np.ndarray,
@@ -203,8 +231,8 @@ class FaceDetectionVisualizationService:
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            # Rang tanlash: xodimlar uchun yashil, mijozlar uchun sariq
-            color = self.GREEN if is_employee else self.YELLOW
+            # Rang tanlash: xodimlar ko'k, mijozlar sariq
+            color = self.BLUE if is_employee else self.YELLOW
 
             # Sariq/yashil to'rtburchak chizish (2px qalinlikda)
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
@@ -247,104 +275,152 @@ class FaceDetectionVisualizationService:
     def _draw_stats(
         self,
         frame: np.ndarray,
-        stats: Dict[str, Any]
+        stats: Dict[str, Any],
     ) -> np.ndarray:
-        """Statistika ma'lumotlarini kadr ustiga qo'shish."""
-        annotated = frame.copy()
+        """Pastki o'ng burchakda chiroyli stat overlay chizish."""
+        h, w = frame.shape[:2]
 
-        # Statistika matnlari
-        lines = [
-            f"Yuzlar: {stats.get('total_faces', 0)}",
-            f"Xodimlar: {stats.get('employees_detected', 0)}",
-            f"Mijozlar: {stats.get('customers_detected', 0)}",
-            f"Kunlik mijozlar: {stats.get('daily_customers', 0)}",
+        employees = stats.get('employees_detected', 0)
+        customers = stats.get('customers_detected', 0)
+
+        font       = cv2.FONT_HERSHEY_SIMPLEX
+        fscale     = 0.62
+        thickness  = 2
+        pad_x, pad_y = 14, 10
+        line_gap   = 8
+
+        # Har bir satr o'lchami
+        def text_size(txt):
+            (tw, th), bl = cv2.getTextSize(txt, font, fscale, thickness)
+            return tw, th + bl
+
+        dot_r = 7   # coloured circle radius
+
+        rows = [
+            {'dot': self.BLUE,   'text': f'Xodimlar:  {employees} ta'},
+            {'dot': self.YELLOW, 'text': f'Mijozlar:  {customers} ta'},
         ]
 
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        thickness = 1
-        line_height = 20
-        start_y = 25
+        row_sizes = [text_size(r['text']) for r in rows]
+        box_w = max(tw for tw, _ in row_sizes) + 2 * pad_x + dot_r * 2 + 8
+        row_h = max(th for _, th in row_sizes)
+        box_h = len(rows) * row_h + (len(rows) - 1) * line_gap + 2 * pad_y
 
-        for i, line in enumerate(lines):
-            y = start_y + i * line_height
-            # Fon to'rtburchak
-            (text_width, text_height), baseline = cv2.getTextSize(
-                line, font, font_scale, thickness
-            )
-            cv2.rectangle(
-                annotated,
-                (5, y - text_height - 5),
-                (text_width + 10, y + 5),
-                (0, 0, 0),
-                cv2.FILLED,
-            )
-            # Matn
+        x1 = w - box_w - 10
+        y1 = h - box_h - 10
+        x2, y2 = w - 10, h - 10
+
+        # Semi-transparent dark background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (20, 20, 20), cv2.FILLED)
+        cv2.addWeighted(overlay, 0.72, frame, 0.28, 0, frame)
+
+        # Border line
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (80, 80, 80), 1)
+
+        for i, row in enumerate(rows):
+            cy = y1 + pad_y + i * (row_h + line_gap) + row_h // 2
+            tx = x1 + pad_x
+
+            # Coloured filled circle
+            cv2.circle(frame, (tx + dot_r, cy), dot_r, row['dot'], cv2.FILLED)
+            cv2.circle(frame, (tx + dot_r, cy), dot_r, (255, 255, 255), 1)
+
+            # Text
+            ty = cy + row_h // 2 - 2
             cv2.putText(
-                annotated,
-                line,
-                (10, y),
-                font,
-                font_scale,
-                (255, 255, 255),
-                thickness,
+                frame, row['text'],
+                (tx + dot_r * 2 + 8, ty),
+                font, fscale, (255, 255, 255), thickness, cv2.LINE_AA,
             )
 
-        return annotated
+        return frame
 
     def _track_customer(
         self,
         signature: str,
         location_id: int,
-        timestamp: datetime
+        timestamp: datetime,
     ):
-        """Mijozni kuzatish va hisoblash."""
+        """Mijozni kuzatish: in-memory cache + DB upsert (24 soat+ saqlanadi)."""
         today_str = timestamp.date().isoformat()
 
-        if today_str not in self._daily_customers:
-            self._daily_customers[today_str] = set()
+        # Kun o'zgarganda cache yangilanadi
+        if self._cache_date != today_str:
+            self._seen_today = set()
+            self._cache_date = today_str
 
-        self._daily_customers[today_str].add(signature)
+        is_new = signature not in self._seen_today
+        self._seen_today.add(signature)
 
-        # Tracked faces ma'lumotlarini yangilash
-        if signature not in self._tracked_faces:
-            self._tracked_faces[signature] = {
-                "first_seen": timestamp,
-                "last_seen": timestamp,
-                "location_id": location_id,
-                "visit_count": 1,
-            }
-        else:
-            self._tracked_faces[signature]["last_seen"] = timestamp
-            self._tracked_faces[signature]["visit_count"] += 1
+        try:
+            from src.core.models.customer import TrackedCustomer
+            obj, created = TrackedCustomer.objects.get_or_create(
+                signature=signature,
+                location_id=location_id,
+                date_str=today_str,
+                defaults={
+                    'first_seen': timestamp,
+                    'last_seen': timestamp,
+                    'visit_count': 1,
+                },
+            )
+            if not created:
+                obj.last_seen = timestamp
+                obj.visit_count += 1
+                obj.save(update_fields=['last_seen', 'visit_count'])
+        except Exception as e:
+            logger.debug(f"TrackedCustomer DB upsert failed: {e}")
 
     def get_daily_customers(self, date_str: Optional[str] = None) -> int:
-        """Kunlik mijozlar sonini olish."""
+        """Kunlik noyob mijozlar soni (DB dan)."""
         if date_str is None:
             date_str = date.today().isoformat()
-        return len(self._daily_customers.get(date_str, set()))
+
+        # Bugun uchun in-memory cache ishlatiladi
+        if date_str == self._cache_date:
+            return len(self._seen_today)
+
+        try:
+            from src.core.models.customer import TrackedCustomer
+            return TrackedCustomer.objects.filter(
+                location_id=self.location_id,
+                date_str=date_str,
+            ).count()
+        except Exception:
+            return 0
 
     def get_tracked_faces_summary(self) -> Dict[str, Any]:
         """Kuzatilayotgan yuzlar xulosasi."""
         today_str = date.today().isoformat()
+        try:
+            from src.core.models.customer import TrackedCustomer
+            rows = TrackedCustomer.objects.filter(
+                location_id=self.location_id,
+                date_str=today_str,
+            ).values('signature', 'first_seen', 'last_seen', 'visit_count')
+            tracked = {
+                r['signature']: {
+                    'first_seen': r['first_seen'].isoformat(),
+                    'last_seen': r['last_seen'].isoformat(),
+                    'visit_count': r['visit_count'],
+                }
+                for r in rows
+            }
+        except Exception:
+            tracked = {}
+
         return {
             "location_id": self.location_id,
             "date": today_str,
-            "total_tracked_faces": len(self._tracked_faces),
+            "total_tracked_faces": len(tracked),
             "daily_customers": self.get_daily_customers(today_str),
-            "tracked_faces": {
-                sig: {
-                    "first_seen": info["first_seen"].isoformat(),
-                    "last_seen": info["last_seen"].isoformat(),
-                    "visit_count": info["visit_count"],
-                }
-                for sig, info in self._tracked_faces.items()
-            },
+            "tracked_faces": tracked,
         }
 
     def reset_daily_count(self):
-        """Kunlik hisobni tozalash."""
-        self._daily_customers.clear()
+        """Kunlik hisobni tozalash (faqat xotira, DB ta'sirlanmaydi)."""
+        self._seen_today.clear()
 
     def get_frame_with_detections(
         self,

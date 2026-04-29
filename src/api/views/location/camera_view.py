@@ -15,9 +15,15 @@ from src.core.services.camera_service import CameraService
 
 logger = logging.getLogger(__name__)
 
-_INITIAL_FRAME_TIMEOUT = 12   # seconds to wait for first frame
-_FRAME_IDLE_TIMEOUT = 20      # seconds of silence before closing stream
-_ANNOTATE_EVERY_N = 5         # run face annotation every N-th frame (~5fps at 25fps)
+_INITIAL_FRAME_TIMEOUT = 12
+_FRAME_IDLE_TIMEOUT = 20
+_ANNOTATE_EVERY_N = 3
+
+# Shared live detection stats: { stream_url -> {employees, customers, ts} }
+_LIVE_STATS: dict = {}
+
+# Singleton viz-service cache: { (stream_url, location_id) -> FaceDetectionVisualizationService }
+_VIZ_SERVICES: dict = {}
 
 
 def _normalize_url(url: str) -> str:
@@ -28,26 +34,41 @@ def _normalize_url(url: str) -> str:
     return s
 
 
-def _annotate_frame_with_viz_service(frame, location_id: int = 0):
+def _get_viz_service(location_id: int, stream_url: str):
+    """Return a cached FaceDetectionVisualizationService; create only once per (url, location)."""
+    from src.core.services.face_detection_visualization_service import FaceDetectionVisualizationService
+    key = (stream_url, location_id)
+    if key not in _VIZ_SERVICES:
+        _VIZ_SERVICES[key] = FaceDetectionVisualizationService(location_id=location_id)
+    return _VIZ_SERVICES[key]
+
+
+def _annotate_frame_with_viz_service(frame, location_id: int = 0, stream_url: str = ''):
     """
-    Draw face bboxes/labels on a frame using FaceDetectionVisualizationService.
-    - Sariq to'rtburchaklar (yellow rectangles)
-    - Xodim ismlari tepasida ko'rsatiladi
-    - Mijozlar sonini hisoblaydi
+    Draw face bboxes/labels using FaceDetectionVisualizationService.
+    - Mijozlar: sariq to'rtburchak
+    - Xodimlar: ko'k to'rtburchak
+    - Pastki o'ng burchakda live statistika overlay
     """
     try:
-        from src.core.services.face_detection_visualization_service import FaceDetectionVisualizationService
         from django.utils import timezone
 
-        # Service'ni yaratish (location_id bilan)
-        viz_service = FaceDetectionVisualizationService(location_id=location_id)
-
-        # Kadrni qayta ishlash va chizish
+        viz_service = _get_viz_service(location_id, stream_url)
         annotated_frame, stats = viz_service.process_frame(
             frame,
             location_id=location_id,
             timestamp=timezone.now(),
         )
+
+        # Live stats ni saqlash (frontend polling uchun)
+        if stream_url:
+            _LIVE_STATS[stream_url] = {
+                'employees': stats.get('employees_detected', 0),
+                'customers': stats.get('customers_detected', 0),
+                'daily_customers': stats.get('daily_customers', 0),
+                'total': stats.get('total_faces', 0),
+                'ts': time.time(),
+            }
 
         return annotated_frame
 
@@ -93,17 +114,15 @@ def _annotate_frame_fallback(frame, location_id: int = 0):
                 crop = frame[y1:y2, x1:x2]
                 rec = fr.recognize_face_sync(crop, location_id=location_id) if (crop is not None and crop.size > 0) else {}
 
-                # Sariq rang barcha yuzlar uchun
-                color = (0, 255, 255)  # Yellow in BGR
+                is_employee = bool(rec and rec.get("is_employee"))
+                # Ko'k xodimlar uchun, sariq mijozlar uchun (BGR)
+                color = (230, 100, 0) if is_employee else (0, 220, 255)
 
-                if rec and rec.get("is_employee"):
+                if is_employee:
                     label = rec.get("employee_name") or "Xodim"
-                elif rec and rec.get("is_unregistered"):
-                    label = "Mijoz"
                 else:
-                    label = "Yuz"
+                    label = "Mijoz"
 
-                # Sariq to'rtburchak chizish
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
                 # Ismni tepada ko'rsatish
@@ -181,12 +200,13 @@ def generate_mjpeg_stream(url: str, annotate: bool = False, location_id: int = 0
 
             if raw_frame is not None:
                 if annotate:
-                    # Har _ANNOTATE_EVERY_N kadrda annotatsiya
                     if frame_count % _ANNOTATE_EVERY_N == 0:
-                        raw_frame = _annotate_frame_with_viz_service(raw_frame.copy(), location_id=location_id)
+                        raw_frame = _annotate_frame_with_viz_service(
+                            raw_frame.copy(), location_id=location_id, stream_url=url
+                        )
                     else:
-                        # Oraliq kadrlarda oddiy annotatsiya
-                        raw_frame = _annotate_frame_fallback(raw_frame.copy(), location_id)
+                        viz = _get_viz_service(location_id, url)
+                        raw_frame = viz.draw_cached_boxes(raw_frame.copy())
 
                 ok, jpeg = cv2.imencode('.jpg', raw_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 frame_bytes = jpeg.tobytes() if ok else None
@@ -245,7 +265,7 @@ def camera_stream_snapshot_view(request):
     if not result.get('success') or result.get('frame') is None:
         return Response({'detail': 'Kameradan kadr olinmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    frame = _annotate_frame_with_viz_service(result['frame'].copy(), location_id=location_id)
+    frame = _annotate_frame_with_viz_service(result['frame'].copy(), location_id=location_id, stream_url=stream_url)
     ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
     if not ok:
         return Response({'detail': 'Rasm kodlanmadi.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -280,6 +300,33 @@ def camera_stream_view(request):
         generate_mjpeg_stream(stream_url, annotate=annotate, location_id=location_id),
         content_type='multipart/x-mixed-replace; boundary=frame',
     )
+
+
+@api_view(['GET'])
+def camera_live_stats_view(request):
+    """
+    Joriy MJPEG streamdan real vaqtda aniqlangan xodimlar va mijozlar sonini qaytaradi.
+    ?url=<stream_url>
+    """
+    stream_url = request.GET.get('url', '').strip()
+    if stream_url:
+        stream_url = _normalize_url(stream_url)
+
+    stale_after = 8  # seconds — if no frame annotated recently, return zeros
+
+    if stream_url and stream_url in _LIVE_STATS:
+        entry = _LIVE_STATS[stream_url]
+        if time.time() - entry['ts'] <= stale_after:
+            return Response({
+                'employees': entry['employees'],
+                'customers': entry['customers'],
+                'daily_customers': entry['daily_customers'],
+                'total': entry['total'],
+                'live': True,
+            })
+
+    # Return zeros if stream not active or too stale
+    return Response({'employees': 0, 'customers': 0, 'daily_customers': 0, 'total': 0, 'live': False})
 
 
 @api_view(['GET'])

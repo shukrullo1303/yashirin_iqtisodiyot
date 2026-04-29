@@ -1,6 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from src.api.views.location.camera_view import camera_stream_view, camera_stream_snapshot_view
+from src.api.views.location.camera_view import camera_stream_view, camera_stream_snapshot_view, camera_live_stats_view
 from src.api.views.dashboard_stats import DashboardStatsView
 import src.core.models as models
 
@@ -49,6 +49,7 @@ urlpatterns = [
     # Camera stream paths MUST come before include(router.urls)
     # to prevent DRF's cameras/<pk>/ pattern from matching 'stream' as a pk.
     path('cameras/stream/snapshot/', camera_stream_snapshot_view, name='camera-stream-snapshot'),
+    path('cameras/stream/live-stats/', camera_live_stats_view, name='camera-live-stats'),
     path('cameras/stream/', camera_stream_view, name='camera-stream'),
     path("", include(router.urls)),
     path("auth/csrf/", CSRFTokenAPIView.as_view(), name="auth-csrf"),
