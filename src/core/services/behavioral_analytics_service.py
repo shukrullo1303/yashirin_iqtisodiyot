@@ -93,8 +93,10 @@ class BehavioralAnalyticsService:
         defaults = {
             "real_customers": queue,
             "reported_revenue": 0.0,
-            "estimated_revenue": float(queue * 50000),
-            "average_check": 50000.0 if queue else 0.0,
+            # Kamera tashrifi pul tushumi emas. Tushum faqat inspektor
+            # kiritgan rasmiy hisobotdan olinadi.
+            "estimated_revenue": 0.0,
+            "average_check": 0.0,
             "discrepancy": 0.0,
             "discrepancy_percentage": 0.0,
         }
@@ -113,12 +115,7 @@ class BehavioralAnalyticsService:
             )
         else:
             analytics.real_customers = max(analytics.real_customers, queue)
-            analytics.estimated_revenue = max(
-                analytics.estimated_revenue, defaults["estimated_revenue"]
-            )
-            if not analytics.average_check and queue:
-                analytics.average_check = defaults["average_check"]
-            analytics.save(update_fields=["real_customers", "estimated_revenue", "average_check", "updated_at"])
+            analytics.save(update_fields=["real_customers", "updated_at"])
 
     def get_peak_hours_report(self, location_id: int, days: int = 7) -> Dict[str, Any]:
         """Oxirgi kunlar bo'yicha peak hour hisobotini qaytaradi."""

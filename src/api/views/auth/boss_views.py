@@ -51,3 +51,47 @@ class BossViewSet(viewsets.ModelViewSet):
         boss.is_active = not boss.is_active
         boss.save()
         return Response({'is_active': boss.is_active})
+
+
+class PendingRegistrationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Superadmin review queue for accounts created through the public form."""
+
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not (user.is_superuser or user.role == "admin"):
+            return User.objects.none()
+        return User.objects.filter(is_approved=False).order_by("date_joined")
+
+    def _can_manage(self, request):
+        return request.user.is_superuser or request.user.role == "admin"
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        if not self._can_manage(request):
+            return Response({"detail": "Ruxsat yo'q"}, status=403)
+
+        user = self.get_object()
+        role = request.data.get("role", "analyst")
+        valid_roles = {choice[0] for choice in User.ROLE_CHOICES} - {"admin"}
+        if role not in valid_roles:
+            return Response({"detail": "Noto'g'ri rol"}, status=400)
+
+        location = request.data.get("location")
+        user.role = role
+        user.location_id = location or None
+        user.is_approved = True
+        user.is_active = True
+        user.save(update_fields=["role", "location", "is_approved", "is_active", "updated_at"])
+        return Response(UserSerializer(user).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        if not self._can_manage(request):
+            return Response({"detail": "Ruxsat yo'q"}, status=403)
+        user = self.get_object()
+        user.is_active = False
+        user.save(update_fields=["is_active", "updated_at"])
+        return Response({"detail": "Ariza rad etildi."})

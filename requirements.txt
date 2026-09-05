@@ -4,7 +4,9 @@ drf-yasg>=1.21
 django-debug-toolbar>=4.0
 django-cors-headers>=4.0
 mysqlclient>=2.2
-opencv-python-headless>=4.8
+# Windows webcams require DirectShow/Media Foundation support, which is not
+# included in the headless build.
+opencv-python>=4.8
 numpy>=1.24
 Pillow>=10.0
 yt-dlp>=2025.01.01

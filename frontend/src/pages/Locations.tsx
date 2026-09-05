@@ -27,6 +27,7 @@ import { Edit, Delete, Add as AddIcon, OpenInNew, CheckCircle } from '@mui/icons
 import toast from 'react-hot-toast'
 import apiClient from '../api/client'
 import GoogleMapPicker from '../components/GoogleMapPicker'
+import { useAuthStore } from '../store/authStore'
 
 interface Location {
   id: number
@@ -77,6 +78,8 @@ const extractErrorMessage = (error: any) => {
 }
 
 function Locations() {
+  const { user } = useAuthStore()
+  const canManageLocations = Boolean((user as any)?.is_superuser)
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
@@ -217,9 +220,9 @@ function Locations() {
           <Button variant="outlined" startIcon={<OpenInNew />} onClick={openMapWindow}>
             Barcha lokatsiyalarni xaritada ochish
           </Button>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
+          {canManageLocations && <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
             Asaka xaritasida qo'shish
-          </Button>
+          </Button>}
         </Stack>
       </Stack>
 
@@ -269,15 +272,15 @@ function Locations() {
                   <Chip label={loc.is_registered ? 'Ha' : 'Yo\'q'} color={loc.is_registered ? 'success' : 'error'} size="small" />
                 </TableCell>
                 <TableCell align="right">
-                  <IconButton color="secondary" onClick={() => checkRegistrationMutation.mutate(loc.id)} disabled={checkRegistrationMutation.isLoading}>
+                  {canManageLocations && <IconButton color="secondary" onClick={() => checkRegistrationMutation.mutate(loc.id)} disabled={checkRegistrationMutation.isLoading}>
                     <CheckCircle fontSize="small" />
-                  </IconButton>
-                  <IconButton color="primary" onClick={() => handleOpen(loc)}>
+                  </IconButton>}
+                  {canManageLocations && <IconButton color="primary" onClick={() => handleOpen(loc)}>
                     <Edit fontSize="small" />
-                  </IconButton>
-                  <IconButton color="error" onClick={() => handleDelete(loc.id)}>
+                  </IconButton>}
+                  {canManageLocations && <IconButton color="error" onClick={() => handleDelete(loc.id)}>
                     <Delete fontSize="small" />
-                  </IconButton>
+                  </IconButton>}
                 </TableCell>
               </TableRow>
             ))}

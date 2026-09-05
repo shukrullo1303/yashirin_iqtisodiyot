@@ -1,6 +1,7 @@
 """Django REST Framework serializers for employee models."""
 
 from rest_framework import serializers
+import re
 
 from src.api.serializer.base import BaseSerializer, models
 
@@ -22,6 +23,12 @@ class EmployeeSerializer(BaseSerializer):
             return latest_face.image_path if latest_face else None
         except Exception:
             return None
+
+    def validate_jshshir(self, value):
+        value = (value or '').strip()
+        if value and not re.fullmatch(r'\d{14}', value):
+            raise serializers.ValidationError("JSHSHIR aynan 14 ta raqamdan iborat bo'lishi kerak.")
+        return value or None
 
     class Meta:
         model = models.Employee

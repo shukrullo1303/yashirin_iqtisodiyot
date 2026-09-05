@@ -3,6 +3,9 @@ from src.core.models.base import *
 
 class Employee(BaseModel):
     """Ходим модели"""
+    # Kamera orqali mijoz sifatida berilgan ID xodim tasdiqlangach doimiy
+    # monitoring ID bo'lib qoladi. Bu login emas, faqat tashrif identifikatori.
+    monitoring_id = models.CharField(max_length=20, unique=True, null=True, blank=True, verbose_name="Doimiy kamera ID")
     location = models.ForeignKey(
         'Location', 
         on_delete=models.CASCADE, 
@@ -15,6 +18,10 @@ class Employee(BaseModel):
     email = models.EmailField(max_length=255, null=True, blank=True, verbose_name="Email")
     passport_number = models.CharField(max_length=50, null=True, blank=True, verbose_name="Паспорт серияси")
     inn = models.CharField(max_length=20, null=True, blank=True, verbose_name="INN")
+    # O'zbekiston fuqarosining 14 xonali shaxsiy identifikatsiya raqami.
+    # Alohida maydon sifatida saqlanadi; eski yozuvlardagi INN ma'lumotlari
+    # bilan aralashtirilmaydi.
+    jshshir = models.CharField(max_length=14, null=True, blank=True, db_index=True, verbose_name="JSHSHIR")
     face_embedding = models.TextField(null=True, blank=True, verbose_name="Yuz embedding")
     is_registered = models.BooleanField(default=False, verbose_name="Рўйхатдан ўтганми")
     is_verified = models.BooleanField(default=False, verbose_name="Солиқчи тасдиғи")
@@ -24,6 +31,7 @@ class Employee(BaseModel):
             ('active', 'Faol'),
             ('fired', 'Ishdan bo‘shatilgan'),
             ('candidate_by_ai', 'AI tomonidan nomzod'),
+            ('customer', 'Mijozga qaytarilgan'),
         ],
         default='active',
         verbose_name='Статус',

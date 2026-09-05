@@ -1,5 +1,11 @@
 from rest_framework import serializers
-from src.core.models import MenuCategory, MenuItem, Table, Order, OrderItem, User, InventoryItem
+from src.core.models import CafeRoom, MenuCategory, MenuItem, Table, Order, OrderItem, User, InventoryItem
+
+
+class CafeRoomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CafeRoom
+        fields = ['id', 'location', 'name', 'width', 'height', 'position_x', 'position_y', 'is_active']
 
 
 class MenuItemSerializer(serializers.ModelSerializer):
@@ -7,7 +13,7 @@ class MenuItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MenuItem
-        fields = ['id', 'category', 'name', 'description', 'price', 'image_url', 'is_available', 'order']
+        fields = ['id', 'category', 'name', 'description', 'price', 'image', 'image_url', 'is_available', 'order']
 
 
 class MenuCategorySerializer(serializers.ModelSerializer):
@@ -20,10 +26,11 @@ class MenuCategorySerializer(serializers.ModelSerializer):
 
 class TableSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
+    room_name = serializers.CharField(source='room.name', read_only=True)
 
     class Meta:
         model = Table
-        fields = ['id', 'location', 'number', 'name', 'capacity', 'is_active', 'qr_token', 'status']
+        fields = ['id', 'location', 'room', 'room_name', 'number', 'name', 'capacity', 'is_active', 'qr_token', 'position_x', 'position_y', 'shape', 'width', 'height', 'status']
 
     def get_status(self, obj):
         open_order = obj.orders.filter(status='open').first()

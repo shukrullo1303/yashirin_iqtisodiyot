@@ -1,16 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
-import { orderApi, tableApi, staffApi, menuApi, analyticsApi } from '../../api/cafe'
+import { orderApi, tableApi, roomApi, staffApi, menuApi, analyticsApi } from '../../api/cafe'
+import apiClient from '../../api/client'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface OrderItem { menu_item_name: string; quantity: number }
 interface OrderT { id: number; table_name: string; waiter_name: string; status: string; total: string; opened_at: string; order_type: string; items: OrderItem[] }
 interface TableStatus { has_open_order: boolean; order_id: number | null; item_count: number }
-interface TableT { id: number; number: number; name: string; capacity: number; status: TableStatus }
+interface TableT { id: number; location: number; room?: number | null; room_name?: string; number: number; name: string; capacity: number; position_x?: number; position_y?: number; width?: number; height?: number; shape?: string; status: TableStatus }
+interface RoomT { id: number; location: number; name: string; width: number; height: number; position_x?: number; position_y?: number }
 interface StaffT { id: number; username: string; full_name: string; role: string; is_active: boolean; date_joined: string }
-interface MenuItemT { id: number; name: string; price: string; is_available: boolean }
-interface CategoryT { id: number; name: string; items: MenuItemT[] }
+interface AiEmployeeT { id: number; full_name: string; position?: string; jshshir?: string; monitoring_id?: string; location_name?: string; latest_image_path?: string; is_verified?: boolean; is_registered?: boolean }
+interface MenuItemT { id: number; category?: number; name: string; description?: string; price: string; image_url?: string | null; is_available: boolean; order?: number }
+interface CategoryT { id: number; location?: number; name: string; order?: number; items: MenuItemT[] }
 interface AnalyticsT {
   total_orders: number
   total_revenue: number
@@ -19,6 +22,10 @@ interface AnalyticsT {
   daily_revenue: { date: string; revenue: number }[]
   order_type_breakdown: { order_type: string; count: number }[]
   weekly_pattern: { weekday: number; count: number }[]
+}
+interface TaxSummaryT {
+  totals?: { total_tax_paid?: number; estimated_tax_due?: number; tax_gap?: number }
+  tax_rate?: number
 }
 
 type Page = 'dashboard' | 'orders' | 'tables' | 'staff' | 'menu' | 'reports' | 'inventory'
@@ -150,14 +157,23 @@ function Sidebar({ active, onNav, onLogout, liveCount }: { active: Page; onNav: 
 }
 
 // ── Dashboard home ─────────────────────────────────────────────────────────────
-function HomePage({ analytics, orders }: { analytics: AnalyticsT | null; orders: OrderT[] }) {
+function HomePage({ analytics, orders, taxSummary }: { analytics: AnalyticsT | null; orders: OrderT[]; taxSummary: TaxSummaryT | null }) {
   if (!analytics) return <div style={{ textAlign:'center', padding:'48px 0', color:'var(--subtext)' }}>Yuklanmoqda…</div>
   const maxPeak = Math.max(...(analytics.peak_hours?.map(h => h.count) ?? [1]), 1)
   const liveOpen = orders.filter(o => o.status === 'open').length
+  const paidTax = Number(taxSummary?.totals?.total_tax_paid || 0)
+  const taxRate = Number(taxSummary?.tax_rate || 0.12)
+  const estimatedTax = Number(taxSummary?.totals?.estimated_tax_due || 0) || Number(analytics.total_revenue || 0) * taxRate
+  const taxGap = estimatedTax - paidTax
+  const money = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 0 }) + " so'm"
   const stats = [
-    { label:'Bugungi daromad', value: Number(analytics.total_revenue).toLocaleString() + " so'm", icon:'💰', color:'#d4621e' },
-    { label:'Buyurtmalar', value: String(analytics.total_orders), icon:'📋', color:'#e8a820' },
+    { label:'Jami daromad', value: Number(analytics.total_revenue).toLocaleString() + " so'm", icon:'💰', color:'#d4621e' },
+    { label:'Jami buyurtmalar', value: String(analytics.total_orders), icon:'📋', color:'#e8a820' },
+    { label:'O‘rtacha zakaz', value: analytics.total_orders ? (Number(analytics.total_revenue) / analytics.total_orders).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " so'm" : '—', icon:'🧾', color:'#7c6ff7' },
     { label:'Hozir jarayonda', value: String(liveOpen), icon:'🔥', color:'#d94545' },
+    { label:'To‘langan soliq', value: money(paidTax), icon:'✅', color:'#2d9e6b' },
+    { label:'Hisoblangan soliq', value: money(estimatedTax), icon:'🧮', color:'#3788d8' },
+    { label:'Soliq tafovuti', value: money(taxGap), icon:'⚖️', color: taxGap > 0 ? '#d94545' : '#2d9e6b' },
     { label:'Top taom', value: analytics.popular_items?.[0]?.menu_item__name || '—', icon:'🍽️', color:'#2d9e6b' },
   ]
   return (
@@ -174,6 +190,9 @@ function HomePage({ analytics, orders }: { analytics: AnalyticsT | null; orders:
             </div>
           </div>
         ))}
+      </div>
+      <div style={{ marginTop:-8, marginBottom:20, color:'var(--subtext)', fontSize:12 }}>
+        Hisoblangan soliq — CRMdagi to‘langan zakazlar asosida nazorat hisobi (sozlangan stavka {taxRate * 100}%); bu rasmiy soliq hisoboti emas.
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 280px', gap:14, marginBottom:20 }}>
@@ -299,9 +318,39 @@ function OrdersPage({ orders, refresh }: { orders: OrderT[]; refresh: () => void
 }
 
 // ── Tables page ────────────────────────────────────────────────────────────────
-function TablesPage({ tables, refresh }: { tables: TableT[]; refresh: () => void }) {
+function TablesPage({ tables, rooms, refresh, refreshRooms }: { tables: TableT[]; rooms: RoomT[]; refresh: () => void; refreshRooms: () => void }) {
   const busy = tables.filter(t => t.status.has_open_order).length
   const free = tables.length - busy
+  const [roomId, setRoomId] = useState<number | null>(rooms[0]?.id ?? null)
+  const [roomDialog, setRoomDialog] = useState(false)
+  const [tableDialog, setTableDialog] = useState(false)
+  const [mapZoom, setMapZoom] = useState(1)
+  const [roomName, setRoomName] = useState('Asosiy zal')
+  const [tableForm, setTableForm] = useState({ number: '', name: '', capacity: '4' })
+  const mapRef = React.useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (roomId === null && rooms.length) setRoomId(rooms[0].id)
+  }, [rooms, roomId])
+  const visibleTables = roomId ? tables.filter((table) => Number(table.room) === roomId) : tables
+  const activeRoom = rooms.find((room) => room.id === roomId)
+  const locationId = activeRoom?.location || tables[0]?.location
+  const createRoom = async () => {
+    if (!locationId || !roomName.trim()) return
+    await roomApi.create({ location: locationId, name: roomName.trim(), width: 900, height: 560 })
+    setRoomDialog(false); setRoomName(''); refreshRooms()
+  }
+  const createTable = async () => {
+    if (!locationId) return
+    try {
+      await tableApi.create({ location: locationId, room: roomId, number: tableForm.number ? Number(tableForm.number) : undefined, name: tableForm.name, capacity: Number(tableForm.capacity), position_x: 60 + visibleTables.length * 84, position_y: 60 })
+    } catch (error: any) {
+      window.alert(error?.response?.data?.number?.[0] || error?.response?.data?.detail || 'Stolni qo‘shib bo‘lmadi')
+      return
+    }
+    setTableDialog(false); setTableForm({ number: '', name: '', capacity: '4' }); refresh()
+  }
+  const removeTable = async (id: number) => { if (window.confirm('Bu stolni o‘chirasizmi?')) { await tableApi.delete(id); refresh() } }
+  const removeRoom = async (id: number) => { if (window.confirm('Bu xona va uning xaritasini o‘chirasizmi?')) { await roomApi.delete(id); setRoomId(null); refreshRooms(); refresh() } }
   return (
     <div>
       <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
@@ -311,26 +360,48 @@ function TablesPage({ tables, refresh }: { tables: TableT[]; refresh: () => void
             <div style={{ fontSize:12, color:'var(--subtext)', fontWeight:600 }}>{s.label}</div>
           </div>
         ))}
-        <button onClick={refresh} style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6, padding:'8px 14px', background:'var(--card)', border:'1px solid var(--border)', borderRadius:10, cursor:'pointer', color:'var(--subtext)', fontFamily:'Nunito', fontSize:12, fontWeight:600 }}><IcoRefresh />Yangilash</button>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          <button onClick={() => setRoomDialog(true)} style={{ padding:'8px 14px', background:'var(--card)', border:'1px solid var(--border)', borderRadius:10, cursor:'pointer', color:'var(--text)', fontFamily:'Nunito', fontSize:12, fontWeight:700 }}>+ Xona</button>
+          <button onClick={() => setTableDialog(true)} disabled={!roomId} style={{ padding:'8px 14px', background:'var(--accent)', border:'none', borderRadius:10, cursor:'pointer', color:'#fff', fontFamily:'Nunito', fontSize:12, fontWeight:700 }}>+ Stol</button>
+          <button onClick={() => { refresh(); refreshRooms() }} style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 14px', background:'var(--card)', border:'1px solid var(--border)', borderRadius:10, cursor:'pointer', color:'var(--subtext)', fontFamily:'Nunito', fontSize:12, fontWeight:600 }}><IcoRefresh />Yangilash</button>
+        </div>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-        {tables.map(t => {
+      <div ref={mapRef} style={{ minHeight:'calc(100vh - 170px)', border:'1px solid var(--border)', borderRadius:18, overflow:'auto', padding:18, backgroundColor:'var(--surface)', backgroundImage:'radial-gradient(circle at 20% 20%, rgba(84,183,255,.10), transparent 30%), linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px)', backgroundSize:'100% 100%, 32px 32px, 32px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', color:'var(--subtext)', fontSize:11, fontWeight:800, letterSpacing:1, marginBottom:12 }}>
+          <span>LOKATSIYA XARITASI · XONALAR VA STOLLAR</span>
+          <div style={{ display:'flex', alignItems:'center', gap:6, letterSpacing:0 }}>
+            <button onClick={() => setMapZoom(z => Math.max(.5, Number((z - .1).toFixed(1))))} title="Kichraytirish" style={{ width:30, height:28, border:'1px solid var(--border)', borderRadius:8, background:'var(--card)', color:'var(--text)', cursor:'pointer', fontSize:18, lineHeight:1 }}>−</button>
+            <button onClick={() => setMapZoom(1)} title="Asl o‘lcham" style={{ minWidth:54, height:28, border:'1px solid var(--border)', borderRadius:8, background:'var(--card)', color:'var(--text)', cursor:'pointer', fontSize:11, fontWeight:700 }}>{Math.round(mapZoom * 100)}%</button>
+            <button onClick={() => setMapZoom(z => Math.min(2, Number((z + .1).toFixed(1))))} title="Kattalashtirish" style={{ width:30, height:28, border:'1px solid var(--border)', borderRadius:8, background:'var(--card)', color:'var(--text)', cursor:'pointer', fontSize:18, lineHeight:1 }}>+</button>
+          </div>
+        </div>
+        <div style={{ position:'relative', minHeight:980, minWidth:1000, zoom:mapZoom } as React.CSSProperties}>
+        {rooms.map((room, roomIndex) => {
+          const roomTables = tables.filter((table) => Number(table.room) === room.id)
+          return <div key={room.id} draggable onClick={() => setRoomId(room.id)} onDragEnd={(event) => { const rect = mapRef.current?.getBoundingClientRect(); if (!rect) return; const x = Math.max(0, Math.round(event.clientX - rect.left - (room.width || 900) / 2)); const y = Math.max(0, Math.round(event.clientY - rect.top - 35)); roomApi.update(room.id, { position_x: x, position_y: y }).then(refreshRooms).catch(() => {}) }} onMouseUp={(event) => { if (event.target !== event.currentTarget) return; const node = event.currentTarget as HTMLDivElement; if (node.offsetWidth !== room.width || node.offsetHeight !== room.height) roomApi.update(room.id, { width: node.offsetWidth, height: node.offsetHeight }).then(refreshRooms).catch(() => {}) }} style={{ position:'absolute', left:room.position_x ?? (roomIndex % 2) * 460 + 10, top:room.position_y ?? Math.floor(roomIndex / 2) * 300, width:Math.max(420, room.width || 900), height:Math.max(260, room.height || 560), maxWidth:'none', resize:'both', overflow:'hidden', border:`2px solid ${room.id === roomId ? 'var(--accent)' : 'rgba(84,183,255,.45)'}`, borderRadius:16, background:'rgba(12,28,49,.48)', flexShrink:0 }}>
+            <div style={{ position:'absolute', top:10, left:14, right:14, display:'flex', justifyContent:'space-between', alignItems:'center', color:'#54b7ff', fontSize:13, fontWeight:900 }}><span>{room.name}</span><button onClick={(event) => { event.stopPropagation(); removeRoom(room.id) }} style={{ border:0, background:'transparent', color:'var(--subtext)', cursor:'pointer', fontSize:16 }}>×</button></div>
+            {roomTables.map(t => {
           const c = t.status.has_open_order ? '#d4621e' : '#2d9e6b'
           return (
-            <div key={t.id} style={{ background:'var(--card)', border:`2px solid ${c}33`, borderRadius:16, padding:16, transition:'all 0.15s', position:'relative', cursor:'default' }}
+            <div key={t.id} draggable={false} onPointerDown={(event) => { event.stopPropagation(); const parent = event.currentTarget.parentElement as HTMLElement; const rect = parent.getBoundingClientRect(); event.currentTarget.setPointerCapture(event.pointerId); (event.currentTarget as any).__drag = { rect, offsetX: event.clientX - rect.left - (t.position_x ?? 40), offsetY: event.clientY - rect.top - (t.position_y ?? 60) } }} onPointerMove={(event) => { const state = (event.currentTarget as any).__drag; if (!state) return; const x = Math.max(8, Math.min(state.rect.width - 60, event.clientX - state.rect.left - state.offsetX)); const y = Math.max(42, Math.min(state.rect.height - 45, event.clientY - state.rect.top - state.offsetY)); event.currentTarget.style.left = `${x}px`; event.currentTarget.style.top = `${y}px` }} onPointerUp={(event) => { const state = (event.currentTarget as any).__drag; if (!state) return; const parent = event.currentTarget.parentElement as HTMLElement; const rect = parent.getBoundingClientRect(); const x = Math.max(8, Math.min(rect.width - 60, event.clientX - rect.left - state.offsetX)); const y = Math.max(42, Math.min(rect.height - 45, event.clientY - rect.top - state.offsetY)); delete (event.currentTarget as any).__drag; event.currentTarget.releasePointerCapture(event.pointerId); tableApi.update(t.id, { position_x: Math.round(x), position_y: Math.round(y) }).then(refresh).catch(() => {}) }} title={`${t.name || `Stol ${t.number}`} · ${t.capacity} o‘rin`} style={{ position:'absolute', left:t.position_x ?? 40, top:t.position_y ?? 60, width:t.width ?? 70, height:t.height ?? 48, minWidth:55, minHeight:40, resize:'both', overflow:'hidden', background:c+'22', border:`2px solid ${c}`, borderRadius:t.shape === 'round' ? '50%' : 8, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', cursor:'grab', touchAction:'none', userSelect:'none', transition:'box-shadow .15s', color:'var(--text)' }}
               onMouseEnter={e => (e.currentTarget.style.borderColor=c)}
               onMouseLeave={e => (e.currentTarget.style.borderColor=c+'33')}
+              onMouseUp={(event) => { const target = event.currentTarget; if (target.offsetWidth !== (t.width ?? 70) || target.offsetHeight !== (t.height ?? 48)) tableApi.update(t.id, { width: target.offsetWidth, height: target.offsetHeight }).then(refresh).catch(() => {}) }}
             >
-              <div style={{ position:'absolute', top:10, right:10, width:8, height:8, borderRadius:4, background:c }} />
-              <div style={{ fontSize:22, fontWeight:800, color:c, marginBottom:4 }}>{t.number}</div>
-              <div style={{ fontSize:11, color:'var(--subtext)', marginBottom:8, fontWeight:600 }}>{t.capacity} o'rin</div>
-              {t.status.has_open_order
-                ? <div style={{ fontSize:11, fontWeight:700 }}>{t.status.item_count} ta mahsulot</div>
-                : <div style={{ fontSize:11, fontWeight:700, color:'#2d9e6b' }}>Bo'sh</div>}
+              <div style={{ fontSize:15, fontWeight:900, color:c }}>{t.number}</div>
+              <div style={{ fontSize:9, color:'var(--subtext)' }}>{t.status.has_open_order ? `${t.status.item_count} ta zakaz` : `${t.capacity} o‘rin`}</div>
+              <button onClick={(event) => { event.stopPropagation(); removeTable(t.id) }} title="Stolni o‘chirish" style={{ position:'absolute', top:-9, right:-9, width:18, height:18, borderRadius:'50%', border:'1px solid var(--border)', background:'var(--card)', color:'var(--subtext)', cursor:'pointer', fontSize:12, lineHeight:'14px' }}>×</button>
             </div>
           )
+            })}
+            {!roomTables.length && <div style={{ position:'absolute', inset:0, display:'grid', placeItems:'center', color:'var(--subtext)', fontSize:14 }}>Bu xonada stol yo‘q.</div>}
+          </div>
         })}
+        {!rooms.length && <div style={{ display:'grid', placeItems:'center', minHeight:360, color:'var(--subtext)', fontSize:14 }}>“+ Xona” orqali birinchi xonani yarating.</div>}
+        </div>
       </div>
+      {roomDialog && <Modal title="Yangi xona yoki zal" onClose={() => setRoomDialog(false)}><div style={{ display:'flex', flexDirection:'column', gap:14 }}><input style={INP} placeholder="Masalan: Asosiy zal" value={roomName} onChange={e => setRoomName(e.target.value)} /><button onClick={createRoom} style={{ padding:12, background:'var(--accent)', color:'#fff', border:0, borderRadius:10, fontFamily:'Nunito', fontWeight:800 }}>Saqlash</button></div></Modal>}
+      {tableDialog && <Modal title="Xona xaritasiga stol qo‘shish" onClose={() => setTableDialog(false)}><div style={{ display:'flex', flexDirection:'column', gap:14 }}><input style={INP} type="number" placeholder="Stol raqami (bo‘sh qoldirsa avtomatik)" value={tableForm.number} onChange={e => setTableForm({...tableForm, number:e.target.value})} /><input style={INP} placeholder="Stol nomi (ixtiyoriy)" value={tableForm.name} onChange={e => setTableForm({...tableForm, name:e.target.value})} /><input style={INP} type="number" min="1" placeholder="O‘rinlar soni" value={tableForm.capacity} onChange={e => setTableForm({...tableForm, capacity:e.target.value})} /><button onClick={createTable} style={{ padding:12, background:'var(--accent)', color:'#fff', border:0, borderRadius:10, fontFamily:'Nunito', fontWeight:800 }}>Xaritaga qo‘shish</button></div></Modal>}
     </div>
   )
 }
@@ -343,6 +414,14 @@ function StaffPage({ staff, refresh }: { staff: StaffT[]; refresh: () => void })
   const [pwd, setPwd] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
+  const [aiEmployees, setAiEmployees] = useState<AiEmployeeT[]>([])
+
+  useEffect(() => {
+    apiClient.get('employees/').then((response) => {
+      const payload = response.data
+      setAiEmployees(Array.isArray(payload) ? payload : (payload?.results ?? []))
+    }).catch(() => setAiEmployees([]))
+  }, [])
 
   const create = async () => {
     if (!form.username || !form.full_name || !form.password) { setErr("Barcha maydonlar to'ldirilishi shart"); return }
@@ -402,6 +481,27 @@ function StaffPage({ staff, refresh }: { staff: StaffT[]; refresh: () => void })
         })}
       </div>
 
+      <div style={{ marginTop:28, marginBottom:12, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div>
+          <div style={{ fontWeight:800, fontSize:16 }}>AI kamera xodimlari</div>
+          <div style={{ color:'var(--subtext)', fontSize:12, marginTop:4 }}>Soliqchi yoki administrator tasdiqlagan xodimlar. Yuz rasmi va doimiy kamera ID orqali taniladi.</div>
+        </div>
+        <span style={{ padding:'5px 12px', borderRadius:20, background:'#2d9e6b22', color:'#2d9e6b', border:'1px solid #2d9e6b44', fontSize:12, fontWeight:700 }}>{aiEmployees.length} ta</span>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
+        {aiEmployees.map((employee) => (
+          <div key={employee.id} style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:16, padding:16, display:'flex', gap:12, alignItems:'center' }}>
+            {employee.latest_image_path ? <img src={`/media/${String(employee.latest_image_path).replace(/^\/+/, '')}`} alt={employee.full_name} style={{ width:58, height:58, borderRadius:14, objectFit:'cover', objectPosition:'center top', border:'2px solid #54b7ff' }} /> : <div style={{ width:58, height:58, borderRadius:14, display:'grid', placeItems:'center', background:'linear-gradient(135deg,#1769e0,#7249db)', color:'#fff', fontWeight:800, fontSize:20 }}>{employee.full_name?.[0] || '?'}</div>}
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontWeight:800, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{employee.full_name}</div>
+              <div style={{ color:'var(--subtext)', fontSize:12 }}>{employee.position || 'Xodim'} · {employee.location_name || 'Lokatsiya'}</div>
+              <div style={{ marginTop:5, fontSize:11, color:'#54b7ff' }}>ID: {employee.monitoring_id || `EMP-${employee.id}`} · JSHSHIR: {employee.jshshir || '—'}</div>
+            </div>
+          </div>
+        ))}
+        {!aiEmployees.length && <div style={{ gridColumn:'1/-1', color:'var(--subtext)', fontSize:13, padding:'18px 0' }}>Hozircha kamera xodimlari yo‘q.</div>}
+      </div>
+
       {/* Add staff modal */}
       {showAdd && (
         <Modal title="Yangi xodim qo'shish" onClose={() => { setShowAdd(false); setErr('') }}>
@@ -451,32 +551,79 @@ function StaffPage({ staff, refresh }: { staff: StaffT[]; refresh: () => void })
 }
 
 // ── Menu page ──────────────────────────────────────────────────────────────────
-function MenuPage({ categories }: { categories: CategoryT[] }) {
+function MenuPage({ categories, refresh }: { categories: CategoryT[]; refresh: () => void }) {
+  const [categoryDialog, setCategoryDialog] = useState(false)
+  const [itemDialog, setItemDialog] = useState(false)
+  const [editingCategory, setEditingCategory] = useState<CategoryT | null>(null)
+  const [editingItem, setEditingItem] = useState<MenuItemT | null>(null)
+  const [categoryName, setCategoryName] = useState('')
+  const [itemForm, setItemForm] = useState<{ category: string; name: string; description: string; price: string; image: File | null }>({ category: '', name: '', description: '', price: '', image: null })
+  const [busy, setBusy] = useState(false)
+  const locationId = categories[0]?.location
   const total = categories.reduce((s,c) => s + c.items.length, 0)
+  const openNewItem = (categoryId?: number) => { setEditingItem(null); setItemForm({ category: categoryId ? String(categoryId) : String(categories[0]?.id || ''), name:'', description:'', price:'', image:null }); setItemDialog(true) }
+  const openEditItem = (item: MenuItemT) => { setEditingItem(item); setItemForm({ category: String(item.category || ''), name:item.name, description:item.description || '', price:String(item.price), image:null }); setItemDialog(true) }
+  const saveCategory = async () => {
+    if (!categoryName.trim() || !locationId) return
+    setBusy(true)
+    try { if (editingCategory) await menuApi.updateCategory(editingCategory.id, { name: categoryName.trim() }); else await menuApi.createCategory({ location: locationId, name: categoryName.trim() }); setCategoryDialog(false); setEditingCategory(null); setCategoryName(''); refresh() } finally { setBusy(false) }
+  }
+  const saveItem = async () => {
+    if (!itemForm.name.trim() || !itemForm.price || !itemForm.category) return
+    setBusy(true)
+    try {
+      const data = new FormData()
+      data.append('category', String(Number(itemForm.category)))
+      data.append('name', itemForm.name.trim())
+      data.append('description', itemForm.description.trim())
+      data.append('price', String(Number(itemForm.price)))
+      if (itemForm.image) data.append('image', itemForm.image)
+      if (editingItem) await menuApi.updateItem(editingItem.id, data)
+      else await menuApi.createItem(data)
+      setItemDialog(false); setEditingItem(null); refresh()
+    } finally { setBusy(false) }
+  }
+  const removeCategory = async (category: CategoryT) => { if (category.items.length && !window.confirm('Bu kategoriyada taomlar bor. Kategoriyani o‘chirasizmi?')) return; if (!window.confirm('Kategoriyani o‘chirasizmi?')) return; await menuApi.deleteCategory(category.id); refresh() }
+  const removeItem = async (item: MenuItemT) => { if (!window.confirm(`${item.name} taomini o‘chirasizmi?`)) return; await menuApi.deleteItem(item.id); refresh() }
+  const toggleItem = async (item: MenuItemT) => { await menuApi.updateItem(item.id, { is_available: !item.is_available }); refresh() }
   return (
     <div>
-      <div style={{ marginBottom:18 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:18 }}>
         <span style={{ fontSize:14, color:'var(--subtext)' }}>Jami: <b style={{ color:'var(--text)' }}>{total} ta taom</b></span>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          <button onClick={() => { setEditingCategory(null); setCategoryName(''); setCategoryDialog(true) }} style={{ padding:'9px 13px', border:'1px solid var(--border)', borderRadius:9, background:'var(--card)', color:'var(--text)', cursor:'pointer', fontFamily:'Nunito', fontWeight:700 }}>+ Kategoriya</button>
+          <button onClick={() => openNewItem()} disabled={!categories.length} style={{ padding:'9px 13px', border:0, borderRadius:9, background:'var(--accent)', color:'#fff', cursor:'pointer', fontFamily:'Nunito', fontWeight:700 }}>+ Yangi taom</button>
+        </div>
       </div>
       {categories.map(cat => (
         <div key={cat.id} style={{ marginBottom:22 }}>
-          <div style={{ fontSize:11, fontWeight:800, color:'var(--subtext)', textTransform:'uppercase', letterSpacing:'0.7px', marginBottom:10 }}>{cat.name}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:'var(--subtext)', textTransform:'uppercase', letterSpacing:'0.7px' }}>{cat.name}</div>
+            <button onClick={() => { setEditingCategory(cat); setCategoryName(cat.name); setCategoryDialog(true) }} style={{ border:0, background:'transparent', color:'var(--accent)', cursor:'pointer', fontSize:12 }}>Tahrirlash</button>
+            <button onClick={() => removeCategory(cat)} style={{ border:0, background:'transparent', color:'#d94545', cursor:'pointer', fontSize:12 }}>O‘chirish</button>
+            <button onClick={() => openNewItem(cat.id)} style={{ marginLeft:'auto', border:'1px solid var(--border)', background:'var(--card)', borderRadius:8, padding:'5px 9px', color:'var(--text)', cursor:'pointer', fontSize:11, fontWeight:700 }}>+ Taom</button>
+          </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
-            {cat.items.map(item => (
+            {[...cat.items].sort((a,b) => Number(a.order || 0) - Number(b.order || 0)).map(item => (
               <div key={item.id} style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:14, padding:16, opacity: item.is_available ? 1 : 0.5 }}>
+                {item.image_url ? <img src={item.image_url} alt={item.name} style={{ width:'100%', height:130, objectFit:'cover', borderRadius:10, marginBottom:12, display:'block' }} /> : <div style={{ width:'100%', height:130, borderRadius:10, marginBottom:12, display:'grid', placeItems:'center', background:'var(--card2)', color:'var(--subtext)', fontSize:28 }}>🍽️</div>}
                 <div style={{ display:'flex', justifyContent:'space-between', marginBottom:10, alignItems:'flex-start' }}>
                   <span style={{ fontWeight:700, fontSize:14 }}>{item.name}</span>
-                  <div style={{ width:24, height:14, borderRadius:7, background: item.is_available ? '#2d9e6b' : 'var(--border)', position:'relative', flexShrink:0 }}>
+                  <button onClick={() => toggleItem(item)} title={item.is_available ? 'Tugagan deb belgilash' : 'Mavjud deb belgilash'} style={{ border:0, padding:0, width:24, height:14, borderRadius:7, background: item.is_available ? '#2d9e6b' : 'var(--border)', position:'relative', flexShrink:0, cursor:'pointer' }}>
                     <span style={{ position:'absolute', top:2, width:10, height:10, borderRadius:5, background:'#fff', left: item.is_available ? 12 : 2, transition:'left 0.2s' }} />
-                  </div>
+                  </button>
                 </div>
                 <div style={{ fontSize:15, fontWeight:800, color:'var(--accent)' }}>{parseFloat(item.price).toLocaleString()} so'm</div>
                 <div style={{ fontSize:11, color: item.is_available ? '#2d9e6b' : '#d94545', marginTop:4, fontWeight:600 }}>{item.is_available ? 'Mavjud' : 'Tugagan'}</div>
+                <div style={{ display:'flex', gap:12, marginTop:12, borderTop:'1px solid var(--border)', paddingTop:9 }}><button onClick={() => openEditItem(item)} style={{ border:0, background:'transparent', color:'var(--accent)', cursor:'pointer', fontSize:12, fontWeight:700 }}>✎ Tahrirlash</button><button onClick={() => removeItem(item)} style={{ border:0, background:'transparent', color:'#d94545', cursor:'pointer', fontSize:12, fontWeight:700 }}>O‘chirish</button></div>
               </div>
             ))}
           </div>
         </div>
       ))}
+      {!categories.length && <div style={{ padding:40, textAlign:'center', color:'var(--subtext)' }}>Avval kategoriya yarating.</div>}
+      {categoryDialog && <Modal title={editingCategory ? 'Kategoriyani tahrirlash' : 'Yangi kategoriya'} onClose={() => setCategoryDialog(false)}><div style={{ display:'flex', flexDirection:'column', gap:14 }}><input style={INP} autoFocus placeholder="Masalan: Birinchi ovqatlar" value={categoryName} onChange={e => setCategoryName(e.target.value)} /><button onClick={saveCategory} disabled={busy || !categoryName.trim()} style={{ padding:12, background:'var(--accent)', color:'#fff', border:0, borderRadius:10, fontFamily:'Nunito', fontWeight:800 }}>{busy ? 'Saqlanmoqda…' : 'Saqlash'}</button></div></Modal>}
+      {itemDialog && <Modal title={editingItem ? 'Taomni tahrirlash' : 'Yangi taom'} onClose={() => setItemDialog(false)}><div style={{ display:'flex', flexDirection:'column', gap:14 }}><select style={SEL} value={itemForm.category} onChange={e => setItemForm({...itemForm, category:e.target.value})}><option value="">Kategoriyani tanlang</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><input style={INP} placeholder="Taom nomi" value={itemForm.name} onChange={e => setItemForm({...itemForm, name:e.target.value})} /><textarea style={{ ...INP, minHeight:80, resize:'vertical' }} placeholder="Tavsif (ixtiyoriy)" value={itemForm.description} onChange={e => setItemForm({...itemForm, description:e.target.value})} /><input style={INP} type="number" min="0" placeholder="Narxi (so‘m)" value={itemForm.price} onChange={e => setItemForm({...itemForm, price:e.target.value})} /><label style={{ border:'1px dashed var(--border)', borderRadius:10, padding:12, color:'var(--subtext)', cursor:'pointer', fontSize:13 }}>📷 Taom rasmi {itemForm.image ? `— ${itemForm.image.name}` : '(ixtiyoriy)'}<input type="file" accept="image/*" hidden onChange={e => setItemForm({...itemForm, image:e.target.files?.[0] || null})} /></label>{itemForm.image && <img src={URL.createObjectURL(itemForm.image)} alt="Tanlangan rasm" style={{ width:'100%', height:130, objectFit:'cover', borderRadius:10 }} />}<button onClick={saveItem} disabled={busy || !itemForm.name.trim() || !itemForm.price || !itemForm.category} style={{ padding:12, background:'var(--accent)', color:'#fff', border:0, borderRadius:10, fontFamily:'Nunito', fontWeight:800 }}>{busy ? 'Saqlanmoqda…' : 'Saqlash'}</button></div></Modal>}
     </div>
   )
 }
@@ -659,13 +806,18 @@ function InventoryPage() {
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function BusinessOwnerDashboard() {
   const navigate = useNavigate()
+  const params = useParams<{ page?: string }>()
   const { logout, user } = useAuthStore()
-  const [active, setActive] = useState<Page>('dashboard')
+  const validPages: Page[] = ['dashboard', 'orders', 'tables', 'staff', 'menu', 'reports', 'inventory']
+  const routePage = validPages.includes(params.page as Page) ? params.page as Page : 'dashboard'
+  const [active, setActive] = useState<Page>(routePage)
   const [orders, setOrders] = useState<OrderT[]>([])
   const [tables, setTables] = useState<TableT[]>([])
+  const [rooms, setRooms] = useState<RoomT[]>([])
   const [staff, setStaff] = useState<StaffT[]>([])
   const [categories, setCategories] = useState<CategoryT[]>([])
   const [analytics, setAnalytics] = useState<AnalyticsT | null>(null)
+  const [taxSummary, setTaxSummary] = useState<TaxSummaryT | null>(null)
   const lastTick = useRef(0)
 
   const loadOrders = useCallback(async () => {
@@ -682,6 +834,13 @@ export default function BusinessOwnerDashboard() {
     } catch {}
   }, [])
 
+  const loadRooms = useCallback(async () => {
+    try {
+      const res = await roomApi.list()
+      setRooms(Array.isArray(res.data) ? res.data : (res.data.results ?? []))
+    } catch { setRooms([]) }
+  }, [])
+
   const loadStaff = useCallback(async () => {
     try {
       const res = await staffApi.list()
@@ -692,16 +851,39 @@ export default function BusinessOwnerDashboard() {
   const loadAnalytics = useCallback(async () => {
     try {
       const res = await analyticsApi.cafe({ days: 30 })
-      setAnalytics(res.data)
+      // Cafe analytics javobi summary ichida keladi; dashboard esa tekis
+      // ko‘rinishdagi qiymatlardan foydalanadi.
+      const payload = res.data || {}
+      const summary = payload.summary || {}
+      setAnalytics({
+        ...payload,
+        total_orders: Number(summary.total_orders ?? payload.total_orders ?? 0),
+        total_revenue: Number(summary.total_revenue ?? payload.total_revenue ?? 0),
+      })
+    } catch {}
+  }, [])
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await menuApi.categories()
+      setCategories(Array.isArray(res.data) ? res.data : (res.data.results ?? []))
+    } catch {}
+  }, [])
+
+  const loadTaxSummary = useCallback(async () => {
+    try {
+      const res = await apiClient.get('dashboard/stats/')
+      setTaxSummary(res.data)
     } catch {}
   }, [])
 
   // Initial load
   useEffect(() => {
-    Promise.all([loadOrders(), loadTables(), loadStaff()])
-    menuApi.categories().then(res => setCategories(Array.isArray(res.data) ? res.data : (res.data.results ?? []))).catch(() => {})
+    Promise.all([loadOrders(), loadTables(), loadRooms(), loadStaff()])
+    loadCategories()
     loadAnalytics()
-  }, [loadOrders, loadTables, loadStaff, loadAnalytics])
+    loadTaxSummary()
+  }, [loadOrders, loadTables, loadRooms, loadStaff, loadAnalytics, loadTaxSummary, loadCategories])
 
   // Real-time polling: orders + tables every 30s, analytics every 5min
   useEffect(() => {
@@ -709,12 +891,14 @@ export default function BusinessOwnerDashboard() {
       loadOrders()
       loadTables()
       lastTick.current++
-      if (lastTick.current % 10 === 0) loadAnalytics()
+      if (lastTick.current % 10 === 0) { loadAnalytics(); loadTaxSummary() }
     }, 30000)
     return () => clearInterval(poll)
-  }, [loadOrders, loadTables, loadAnalytics])
+  }, [loadOrders, loadTables, loadAnalytics, loadTaxSummary])
 
   const liveOpen = orders.filter(o => o.status === 'open').length
+
+  useEffect(() => { setActive(routePage) }, [routePage])
 
   const pageTitles: Record<Page, string> = {
     dashboard: `Bosh sahifa — ${new Date().toLocaleDateString('uz-UZ',{day:'numeric',month:'long',year:'numeric'})}`,
@@ -727,11 +911,11 @@ export default function BusinessOwnerDashboard() {
   }
 
   const renderPage = () => {
-    if (active === 'dashboard') return <HomePage analytics={analytics} orders={orders} />
+    if (active === 'dashboard') return <HomePage analytics={analytics} orders={orders} taxSummary={taxSummary} />
     if (active === 'orders')    return <OrdersPage orders={orders} refresh={loadOrders} />
-    if (active === 'tables')    return <TablesPage tables={tables} refresh={loadTables} />
+    if (active === 'tables')    return <TablesPage tables={tables} rooms={rooms} refresh={loadTables} refreshRooms={loadRooms} />
     if (active === 'staff')     return <StaffPage staff={staff} refresh={loadStaff} />
-    if (active === 'menu')      return <MenuPage categories={categories} />
+    if (active === 'menu')      return <MenuPage categories={categories} refresh={loadCategories} />
     if (active === 'reports')   return <ReportsPage analytics={analytics} orders={orders} />
     if (active === 'inventory') return <InventoryPage />
     return null
@@ -739,7 +923,7 @@ export default function BusinessOwnerDashboard() {
 
   return (
     <div className="cafe-root" style={{ display:'flex' }}>
-      <Sidebar active={active} onNav={setActive} onLogout={() => { logout(); navigate('/login') }} liveCount={liveOpen} />
+      <Sidebar active={active} onNav={(page) => { setActive(page); navigate(`/owner/${page}`) }} onLogout={() => { logout(); navigate('/login') }} liveCount={liveOpen} />
       <div style={{ marginLeft:220, flex:1, padding:'24px 26px', minHeight:'100vh' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:22 }}>
           <h1 style={{ fontSize:20, fontWeight:800, letterSpacing:'-0.3px' }}>{pageTitles[active]}</h1>

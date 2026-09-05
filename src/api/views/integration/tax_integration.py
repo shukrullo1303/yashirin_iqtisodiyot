@@ -1,4 +1,8 @@
-from src.api.views.base import *    
+from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
+
+from src.api.views.base import *
+from src.core.services.governance_service import audit
 
 
 class TaxIntegrationViewSet(BaseModelViewSet):
@@ -10,6 +14,40 @@ class TaxIntegrationViewSet(BaseModelViewSet):
         if location_id:
             queryset = queryset.filter(location_id=location_id)
         return queryset
+
+    def _can_enter_for_location(self, location):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        if user.role != "tax_inspector":
+            return False
+        return location.id in self._allowed_location_ids()
+
+    def perform_create(self, serializer):
+        location = serializer.validated_data["location"]
+        if not self._can_enter_for_location(location):
+            raise PermissionDenied("Faqat biriktirilgan lokatsiya uchun soliq ma'lumotini kiritish mumkin.")
+        tax_id = serializer.validated_data.get("tax_id") or location.tax_id or f"MANUAL-{location.id}"
+        row = serializer.save(
+            tax_id=tax_id,
+            entered_by=self.request.user,
+            is_manual=True,
+            last_sync=timezone.now(),
+            sync_status="success",
+        )
+        audit(self.request.user, "create", row, f"Soliq ma'lumoti kiritildi: {row.reported_revenue:,.0f} so'm", location=location)
+
+    def perform_update(self, serializer):
+        if not self._can_enter_for_location(serializer.validated_data.get("location", serializer.instance.location)):
+            raise PermissionDenied("Bu soliq yozuvini tahrirlashga ruxsat yo'q.")
+        row = serializer.save(last_sync=timezone.now(), sync_status="success", is_manual=True)
+        audit(self.request.user, "update", row, "Soliq ma'lumoti tahrirlandi", location=row.location)
+
+    def perform_destroy(self, instance):
+        if not self.request.user.is_superuser:
+            raise PermissionDenied("Soliq yozuvini faqat superadmin o'chirishi mumkin.")
+        audit(self.request.user, "delete", instance, "Soliq ma'lumoti o'chirildi", location=instance.location)
+        instance.delete()
 
     @action(detail=False, methods=['post'], url_path='check-registration')
     def check_registration(self, request):

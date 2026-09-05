@@ -146,9 +146,10 @@ class FaceRecognitionService:
         self.fallback_distance_threshold = 10.0
 
         cascade_dir = getattr(cv2.data, "haarcascades", "")
+        cascade_factory = getattr(cv2, "CascadeClassifier", None)
         self.face_cascade = (
-            cv2.CascadeClassifier(f"{cascade_dir}haarcascade_frontalface_default.xml")
-            if cascade_dir
+            cascade_factory(f"{cascade_dir}haarcascade_frontalface_default.xml")
+            if cascade_dir and cascade_factory is not None
             else None
         )
 
@@ -475,6 +476,58 @@ class FaceRecognitionService:
         pickled = base64.b64encode(pickle.dumps(encoding)).decode()
         return encryption_service.encrypt(pickled)
 
+    def _link_employee_to_recent_visitor_sessions(self, employee: Employee, encoding: np.ndarray) -> int:
+        """Qo'lda yaratilgan xodimni shu joydagi yangi kamera tashrifiga bog'laydi.
+
+        Xodim rasm bilan qo'shilgan bo'lsa, oldingi mijoz yozuvi alohida qolib
+        ketmasin. Faqat oxirgi retention oralig'idagi, yetarlicha o'xshash
+        tashriflar biriktiriladi.
+        """
+        from datetime import timedelta
+        from src.core.models.customer import VisitorSession
+
+        target = np.asarray(encoding, dtype=np.float32).flatten()
+        cutoff = timezone.now() - timedelta(
+            hours=int(getattr(settings, "VISITOR_BIOMETRIC_RETENTION_HOURS", 24))
+        )
+        linked = 0
+        sessions = VisitorSession.objects.filter(
+            location_id=employee.location_id, entered_at__gte=cutoff
+        ).exclude(face_embedding="")
+        threshold = float(getattr(settings, "VISITOR_FACE_MATCH_THRESHOLD", 0.40))
+        for session in sessions.iterator():
+            try:
+                raw = encryption_service.decrypt(session.face_embedding) or session.face_embedding
+                known = np.asarray(pickle.loads(base64.b64decode(raw)), dtype=np.float32).flatten()
+            except Exception:
+                continue
+            if known.shape != target.shape:
+                continue
+            if len(target) == 128:
+                score = float(np.dot(known, target) / ((np.linalg.norm(known) * np.linalg.norm(target)) + 1e-8))
+            else:
+                score = max(0.0, 1.0 - float(np.linalg.norm(known - target)) / self.fallback_distance_threshold)
+            if score < threshold:
+                continue
+            VisitorSession.objects.filter(pk=session.pk).update(is_employee=True, employee=employee)
+            if not employee.monitoring_id:
+                employee.monitoring_id = session.visitor_id
+                employee.save(update_fields=["monitoring_id", "updated_at"])
+            linked += 1
+        return linked
+
+    def reconcile_recent_employee_visitors(self) -> int:
+        """Oldin qo'lda qo'shilgan xodimlarni ham ochiq kamera yozuvlariga bog'laydi."""
+        linked = 0
+        for employee in Employee.objects.filter(is_active=True).exclude(face_embedding__isnull=True).exclude(face_embedding=""):
+            try:
+                raw = encryption_service.decrypt(employee.face_embedding) or employee.face_embedding
+                encoding = np.asarray(pickle.loads(base64.b64decode(raw)), dtype=np.float32).flatten()
+            except Exception:
+                continue
+            linked += self._link_employee_to_recent_visitor_sessions(employee, encoding)
+        return linked
+
     def get_face_signature(self, face_image: np.ndarray) -> Optional[str]:
         encoding = self._encode_face(face_image)
         if encoding is None:
@@ -599,7 +652,8 @@ class FaceRecognitionService:
             employee.save(update_fields=["face_embedding", "status"])
 
             cache.delete(f"{self.cache_prefix}{employee.location_id}")
-            return {"success": True, "face_id": face_record.id}
+            linked = self._link_employee_to_recent_visitor_sessions(employee, encoding)
+            return {"success": True, "face_id": face_record.id, "linked_visitors": linked}
         except Exception as exc:
             logger.error("Yuz qo'shishda xatolik: %s", exc, exc_info=True)
             return {"success": False, "error": str(exc)}

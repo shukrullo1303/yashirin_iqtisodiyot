@@ -23,9 +23,17 @@ export const menuApi = {
 export const tableApi = {
   list: (locationId?: number) =>
     apiClient.get('cafe/tables/', { params: locationId ? { location_id: locationId } : {} }),
-  create: (data: { location: number; number: number; name?: string; capacity?: number }) =>
+  create: (data: { location: number; room?: number | null; number?: number; name?: string; capacity?: number; position_x?: number; position_y?: number; shape?: string; width?: number; height?: number }) =>
     apiClient.post('cafe/tables/', data),
+  update: (id: number, data: Partial<{ room: number | null; name: string; capacity: number; position_x: number; position_y: number; shape: string; width: number; height: number }>) => apiClient.patch(`cafe/tables/${id}/`, data),
   delete: (id: number) => apiClient.delete(`cafe/tables/${id}/`),
+}
+
+export const roomApi = {
+  list: (locationId?: number) => apiClient.get('cafe/rooms/', { params: locationId ? { location_id: locationId } : {} }),
+  create: (data: { location: number; name: string; width?: number; height?: number; position_x?: number; position_y?: number }) => apiClient.post('cafe/rooms/', data),
+  update: (id: number, data: Partial<{ name: string; width: number; height: number; position_x: number; position_y: number }>) => apiClient.patch(`cafe/rooms/${id}/`, data),
+  delete: (id: number) => apiClient.delete(`cafe/rooms/${id}/`),
 }
 
 // ── Orders ────────────────────────────────────────────────────────────────────

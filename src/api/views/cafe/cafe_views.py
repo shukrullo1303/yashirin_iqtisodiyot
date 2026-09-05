@@ -3,9 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 
-from src.core.models import MenuCategory, MenuItem, Table, Order, OrderItem, User, InventoryItem
+from src.core.models import CafeRoom, MenuCategory, MenuItem, Table, Order, OrderItem, User, InventoryItem
 from src.api.serializer.cafe import (
-    MenuCategorySerializer, MenuItemSerializer, TableSerializer,
+    CafeRoomSerializer, MenuCategorySerializer, MenuItemSerializer, TableSerializer,
     OrderSerializer, OrderItemSerializer, InventoryItemSerializer,
 )
 
@@ -52,6 +52,31 @@ class MenuCategoryViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         if not is_manager_or_above(request.user):
             return Response({'detail': 'Ruxsat yo\'q'}, status=403)
+        return super().destroy(request, *args, **kwargs)
+
+
+class CafeRoomViewSet(viewsets.ModelViewSet):
+    serializer_class = CafeRoomSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = CafeRoom.objects.filter(is_active=True)
+        location_id = self.request.query_params.get('location_id')
+        return qs.filter(location_id=location_id) if location_id else qs
+
+    def create(self, request, *args, **kwargs):
+        if not is_manager_or_above(request.user):
+            return Response({'detail': 'Faqat lokatsiya egasi yoki menejer xona qo‘sha oladi.'}, status=403)
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if not is_manager_or_above(request.user):
+            return Response({'detail': 'Ruxsat yo‘q'}, status=403)
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if not is_manager_or_above(request.user):
+            return Response({'detail': 'Ruxsat yo‘q'}, status=403)
         return super().destroy(request, *args, **kwargs)
 
 
@@ -103,7 +128,17 @@ class TableViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not is_manager_or_above(request.user):
             return Response({'detail': 'Ruxsat yo\'q'}, status=403)
-        return super().create(request, *args, **kwargs)
+        data = request.data.copy()
+        location_id = data.get('location') or getattr(request.user, 'location_id', None)
+        if not data.get('number') and location_id:
+            last = Table.objects.filter(location_id=location_id).order_by('-number').values_list('number', flat=True).first() or 0
+            data['number'] = int(last) + 1
+        if not data.get('location') and location_id:
+            data['location'] = location_id
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, *args, **kwargs):
         if not is_manager_or_above(request.user):

@@ -1,5 +1,8 @@
 from config.settings.base import *
 
+# Kunlik tashriflar Asaka mahalliy vaqti bo'yicha 00:00–24:00 hisoblanadi.
+TIME_ZONE = 'Asia/Tashkent'
+
 import os
 
 BASE_DIR = BASE_DIR.parent
@@ -122,6 +125,31 @@ CAMERA_ANALYSIS_DURATION_SECONDS = 15
 
 # Face detection: kamera oldida 30 daqiqa = potentsial xodim (test uchun 1800s)
 EMPLOYEE_PRESENCE_THRESHOLD_SECONDS = 1800
+
+# Visitor monitoring works continuously while Django is running.  Biometric
+# snapshots and face vectors are automatically erased after 24 hours.
+VISITOR_MONITOR_ENABLED = True
+# 1 soniyalik tekshiruv: kirish/chiqish 2–3 soniyada qayd qilinishi uchun.
+VISITOR_MONITOR_INTERVAL_SECONDS = 1
+VISITOR_MONITOR_CAPTURE_WORKERS = 4
+VISITOR_LONG_STAY_MINUTES = 180
+VISITOR_BIOMETRIC_RETENTION_HOURS = 24
+VISITOR_FACE_MATCH_THRESHOLD = 0.40
+# Same-camera partial-face continuity and a conservative exit fallback when
+# exactly one person is currently marked inside a location.
+VISITOR_TRACK_FACE_MATCH_THRESHOLD = 0.24
+# New entry is registered sooner; short-lived tracking prevents duplicate IDs.
+VISITOR_NEW_FACE_CONFIDENCE = 0.55
+# Chiqish kamerasi ko'pincha yon tomon/harakatdagi yuzni ko'radi. Lokatsiyada
+# faqat bitta ochiq tashrif bo'lsa, shu yuzni yopish uchun yumshoqroq chegara.
+# Bir nechta ochiq odam bo'lsa bu qoida ishlamaydi.
+VISITOR_SINGLE_OPEN_EXIT_THRESHOLD = 0.18
+
+# Risk panelidagi tushum ssenariysi (rasmiy soliq hisob-kitobi emas). Haqiqiy
+# o'rtacha chek va stavka ma'lum bo'lsa, superadmin ushbu qiymatlarni muhit
+# o'zgaruvchilari orqali almashtirishi mumkin.
+RISK_AVERAGE_TICKET = float(os.environ.get('RISK_AVERAGE_TICKET', '40000'))
+RISK_REFERENCE_TAX_RATE = float(os.environ.get('RISK_REFERENCE_TAX_RATE', '0.12'))
 
 # In-memory cache for face encodings and presence tracking
 CACHES = {

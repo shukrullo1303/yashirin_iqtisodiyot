@@ -40,13 +40,35 @@ class MenuItem(BaseModel):
         return None
 
 
+class CafeRoom(BaseModel):
+    """CRM xaritasidagi xona yoki zal."""
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='cafe_rooms')
+    name = models.CharField(max_length=120)
+    width = models.PositiveIntegerField(default=900)
+    height = models.PositiveIntegerField(default=560)
+    position_x = models.IntegerField(default=20)
+    position_y = models.IntegerField(default=20)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cafe_rooms'
+        ordering = ['name']
+        unique_together = [['location', 'name']]
+
+
 class Table(BaseModel):
     location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='tables')
+    room = models.ForeignKey(CafeRoom, on_delete=models.SET_NULL, null=True, blank=True, related_name='tables')
     number = models.IntegerField()
     name = models.CharField(max_length=100, blank=True, default='')
     capacity = models.IntegerField(default=4)
     is_active = models.BooleanField(default=True)
     qr_token = models.UUIDField(default=__import__('uuid').uuid4, unique=True, editable=False)
+    position_x = models.IntegerField(default=40)
+    position_y = models.IntegerField(default=40)
+    shape = models.CharField(max_length=20, default='rect')
+    width = models.PositiveIntegerField(default=70)
+    height = models.PositiveIntegerField(default=48)
 
     class Meta:
         db_table = 'cafe_tables'

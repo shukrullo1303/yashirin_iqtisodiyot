@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { TextField, Button, Paper, Typography, Container, Box, CircularProgress, MenuItem } from '@mui/material'
+import { TextField, Button, Paper, Typography, Container, Box, CircularProgress } from '@mui/material'
 import { toast } from 'react-hot-toast'
 import apiClient from '../api/client'
 
@@ -27,7 +27,6 @@ const Register = () => {
     email: '',
     password: '',
     full_name: '',
-    role: 'business_owner',
   })
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,8 +38,8 @@ const Register = () => {
     setLoading(true)
 
     try {
-      await apiClient.post('auth/register/', formData)
-      toast.success("Muvaffaqiyatli ro'yxatdan o'tdingiz!")
+      const response = await apiClient.post('auth/register/', formData)
+      toast.success(response.data.message || "Arizangiz superadmin tasdiqlashiga yuborildi.")
       navigate('/login')
     } catch (error: any) {
       toast.error(getErrorMessage(error))
@@ -96,22 +95,9 @@ const Register = () => {
               onChange={handleChange}
               disabled={loading}
             />
-            <TextField
-              margin="normal"
-              required
-              fullWidth
-              name="role"
-              label="Roli"
-              select
-              value={formData.role}
-              onChange={handleChange}
-              disabled={loading}
-            >
-              <MenuItem value="business_owner">Tadbirkor</MenuItem>
-              <MenuItem value="analyst">Analitik</MenuItem>
-              <MenuItem value="tax_inspector">Soliq inspektori</MenuItem>
-              <MenuItem value="admin">Admin</MenuItem>
-            </TextField>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              Arizangiz superadmin tomonidan ko‘rib chiqiladi. Tasdiqlangandan keyin tizimga kira olasiz.
+            </Typography>
             <TextField
               margin="normal"
               required

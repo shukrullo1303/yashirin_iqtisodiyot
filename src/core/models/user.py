@@ -33,8 +33,17 @@ class User(AbstractUser):
         related_name='staff',
         verbose_name="Lokatsiya"
     )
+    # Soliq inspektori bir vaqtning o'zida bir nechta biriktirilgan
+    # lokatsiyani tekshirishi mumkin. Bu egalik emas, faqat ko'rish doirasi.
+    assigned_locations = models.ManyToManyField(
+        'core.Location', blank=True, related_name='assigned_inspectors',
+        verbose_name="Biriktirilgan tekshiruv lokatsiyalari"
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
+    # Public registration creates a pending account.  Only an administrator can
+    # activate it after reviewing the request.
+    is_approved = models.BooleanField(default=False, verbose_name="Tasdiqlangan")
     # created_at o'rniga Django-ning tayyor date_joined maydonidan foydalanish ham mumkin
 
     class Meta:

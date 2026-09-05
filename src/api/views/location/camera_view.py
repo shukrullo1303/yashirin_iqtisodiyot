@@ -1,13 +1,15 @@
 import ssl
 import time
+import threading
 import urllib.request
 import urllib.error
 import urllib.parse
 import cv2
 from django.http import StreamingHttpResponse, HttpResponse
-from rest_framework.decorators import api_view
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import permissions, status
 from typing import Optional
 import logging
 
@@ -24,6 +26,14 @@ _LIVE_STATS: dict = {}
 
 # Singleton viz-service cache: { (stream_url, location_id) -> FaceDetectionVisualizationService }
 _VIZ_SERVICES: dict = {}
+# Browser orqali olingan lokal webcamlar uchun monitor holati (track/ID)
+# har kadrda yo'qolib ketmasligi kerak.
+_LOCAL_MONITORS: dict = {}
+_LOCAL_MONITORS_LOCK = threading.Lock()
+# Har lokal webcam o'zining eng oxirgi AI tahlil vaqtini saqlaydi. Bu holat
+# yuqoridagi umumiy ro'yxatda emas, aynan kamera kartasida ko'rsatiladi.
+_LOCAL_CAMERA_ANALYSIS: dict = {}
+_LOCAL_CAMERA_ANALYSIS_LOCK = threading.Lock()
 
 
 def _normalize_url(url: str) -> str:
@@ -47,7 +57,7 @@ def _annotate_frame_with_viz_service(frame, location_id: int = 0, stream_url: st
     """
     Draw face bboxes/labels using FaceDetectionVisualizationService.
     - Mijozlar: sariq to'rtburchak
-    - Xodimlar: ko'k to'rtburchak
+    - Xodimlar: sariq to'rtburchak va "Xodim: F.I.Sh." yozuvi
     - Pastki o'ng burchakda live statistika overlay
     """
     try:
@@ -115,11 +125,11 @@ def _annotate_frame_fallback(frame, location_id: int = 0):
                 rec = fr.recognize_face_sync(crop, location_id=location_id) if (crop is not None and crop.size > 0) else {}
 
                 is_employee = bool(rec and rec.get("is_employee"))
-                # Ko'k xodimlar uchun, sariq mijozlar uchun (BGR)
-                color = (230, 100, 0) if is_employee else (0, 220, 255)
+                # Operator ekrani uchun aniqlangan odamlar sariq ramkada.
+                color = (0, 220, 255)
 
                 if is_employee:
-                    label = rec.get("employee_name") or "Xodim"
+                    label = f"Xodim: {rec.get('employee_name') or 'Noma’lum'}"
                 else:
                     label = "Mijoz"
 
@@ -200,11 +210,16 @@ def generate_mjpeg_stream(url: str, annotate: bool = False, location_id: int = 0
 
             if raw_frame is not None:
                 if annotate:
-                    if frame_count % _ANNOTATE_EVERY_N == 0:
+                    # Birinchi kadrni hech qachon AI model yuklanishini kutib
+                    # ushlab turmaymiz. Aks holda webcam ochiq bo‘lsa ham
+                    # brauzer 12 soniya ichida rasm ololmay oqimni uzadi.
+                    # Dastlab xom tasvir chiqadi, keyingi kadrlarda sariq
+                    # yuz ramkalari kesh orqali uzluksiz ko‘rinadi.
+                    if frame_count > 0 and frame_count % _ANNOTATE_EVERY_N == 0:
                         raw_frame = _annotate_frame_with_viz_service(
                             raw_frame.copy(), location_id=location_id, stream_url=url
                         )
-                    else:
+                    elif frame_count > 0:
                         viz = _get_viz_service(location_id, url)
                         raw_frame = viz.draw_cached_boxes(raw_frame.copy())
 
@@ -233,6 +248,7 @@ def generate_mjpeg_stream(url: str, annotate: bool = False, location_id: int = 0
 
 
 @api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def camera_stream_snapshot_view(request):
     """Single JPEG snapshot (optionally with face-annotation overlay).
 
@@ -273,6 +289,7 @@ def camera_stream_snapshot_view(request):
 
 
 @api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def camera_stream_view(request):
     """MJPEG stream — use as <img src='/api/cameras/stream/?url=...'> in the frontend.
 
@@ -302,7 +319,70 @@ def camera_stream_view(request):
     )
 
 
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def camera_local_frame_view(request):
+    """Browserdagi lokal webcam kadrini AI tahlilga yuboradi.
+
+    Windows fon jarayoni USB webcamni ocholmasa, operator brauzeri kamerani
+    oladi. Shu endpoint kadrni doimiy monitor va annotatsiyaga uzatadi.
+    """
+    try:
+        from src.core.models import Camera
+        from src.core.services.visitor_monitor_service import VisitorMonitorService
+        import numpy as np
+
+        camera_id = int(request.query_params.get('camera_id') or 0)
+        camera = Camera.objects.select_related('location').get(pk=camera_id, is_active=True)
+        uploaded = request.FILES.get('frame')
+        if uploaded is None:
+            return Response({'detail': 'Kamera kadri yuborilmadi.'}, status=status.HTTP_400_BAD_REQUEST)
+        frame = cv2.imdecode(np.frombuffer(uploaded.read(), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is None or frame.size == 0:
+            return Response({'detail': 'Kamera kadri o‘qilmadi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # setdefault(camera.id, VisitorMonitorService()) default argumentini
+        # har kadrda yaratadi. Bu model/track holatini og'irlashtirib, kirish
+        # va chiqish aniqlashini beqaror qilardi. Har kamera uchun bitta
+        # monitorni haqiqatan ham qayta ishlatamiz.
+        with _LOCAL_MONITORS_LOCK:
+            monitor = _LOCAL_MONITORS.get(camera.id)
+            if monitor is None:
+                monitor = VisitorMonitorService()
+                _LOCAL_MONITORS[camera.id] = monitor
+        monitor.process_frame(camera, frame)
+        with _LOCAL_CAMERA_ANALYSIS_LOCK:
+            _LOCAL_CAMERA_ANALYSIS[camera.id] = timezone.now()
+        # Brauzerda asl <video> oqimi 25-30 FPS bo'lib qolishi uchun butun
+        # annotatsiyalangan JPEGni qaytarmaymiz. Monitor aniqlagan bboxlar
+        # qayta YuNet/SFace ishlatmasdan frontendga uzatiladi.
+        stream_key = f'local:{camera.id}'
+        detections = [
+            {
+                'bbox': [int(value) for value in item.get('bbox', [])],
+                'label': item.get('label') or 'Odam',
+                'is_employee': bool(item.get('is_employee')),
+            }
+            for item in monitor.get_latest_detections()
+            if len(item.get('bbox', [])) == 4
+        ]
+        _LIVE_STATS[stream_key] = {
+            'employees': sum(1 for item in detections if item['is_employee']),
+            'customers': sum(1 for item in detections if not item['is_employee']),
+            'daily_customers': 0,
+            'total': len(detections),
+            'ts': time.time(),
+        }
+        return Response({'width': int(frame.shape[1]), 'height': int(frame.shape[0]), 'detections': detections})
+    except Camera.DoesNotExist:
+        return Response({'detail': 'Faol kamera topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as exc:
+        logger.exception('Local webcam frame analysis failed: %s', exc)
+        return Response({'detail': 'Lokal webcam tahlilida xato yuz berdi.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def camera_live_stats_view(request):
     """
     Joriy MJPEG streamdan real vaqtda aniqlangan xodimlar va mijozlar sonini qaytaradi.

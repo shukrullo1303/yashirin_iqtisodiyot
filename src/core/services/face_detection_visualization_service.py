@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import logging
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, date
 from django.utils import timezone
@@ -18,8 +19,8 @@ class FaceDetectionVisualizationService:
     """
 
     # Ranglar (BGR format)
-    YELLOW = (0, 220, 255)   # Sariq - mijozlar
-    BLUE   = (230, 100, 0)   # Ko'k   - xodimlar
+    YELLOW = (0, 220, 255)   # Sariq - operator ko'radigan aniqlangan odam
+    BLUE   = (230, 100, 0)   # Ko'k   - eski oqimlar bilan moslik uchun
     WHITE  = (255, 255, 255)
     BLACK  = (0, 0, 0)
     GREEN  = (0, 200, 0)     # (unused, kept for compatibility)
@@ -33,9 +34,12 @@ class FaceDetectionVisualizationService:
 
         # Oxirgi kadrdan aniqlangan bboxlar — intermediate kadrlarda qayta chizish uchun
         self._last_face_data: List[Dict[str, Any]] = []
+        self._last_person_data: List[Dict[str, Any]] = []
+        self._last_person_detection_at = 0.0
 
         # Face recognition service'ni import qilish
         self._face_service = None
+        self._person_service = None
         self._models_loaded = False
         self._try_load_models()
         self._load_today_from_db()
@@ -52,6 +56,11 @@ class FaceDetectionVisualizationService:
         except Exception as e:
             logger.warning(f"Could not load face recognition models: {e}")
             self._models_loaded = False
+        try:
+            from src.core.services.person_detection_service import PersonDetectionService
+            self._person_service = PersonDetectionService()
+        except Exception as e:
+            logger.warning(f"Could not load person detector: {e}")
 
     def _load_today_from_db(self):
         """Bugungi kuzatilgan mijozlarni DB dan in-memory cache ga yuklash."""
@@ -124,7 +133,9 @@ class FaceDetectionVisualizationService:
                     )
 
                     if identity.get("is_employee"):
-                        display_name = identity.get("employee_name", "Xodim")
+                        # Ism lokatsiya bo'yicha xodimlar bazasidan olinadi.
+                        # "Xodim" prefiksi operatorga mijoz bilan adashmaslikka yordam beradi.
+                        display_name = f"Xodim: {identity.get('employee_name') or 'Noma’lum'}"
                         is_employee = True
                         logger.debug(f"Employee recognized: {display_name}")
                 except Exception as e:
@@ -134,7 +145,9 @@ class FaceDetectionVisualizationService:
             if not display_name:
                 signature = self._get_face_signature(crop) if self._models_loaded else None
                 if signature:
-                    display_name = f"Mijoz #{signature[:4]}"
+                    # Texnik signature operatorga ko‘rsatilmaydi: u kadrdan
+                    # kadrga almashib, mijozni boshqa odamdek ko‘rsatishi mumkin.
+                    display_name = "Mijoz"
                     self._track_customer(signature, location_id, timestamp)
 
             face_data.append({
@@ -142,6 +155,12 @@ class FaceDetectionVisualizationService:
                 "display_name": display_name,
                 "is_employee": is_employee,
             })
+
+        # Yuz yo‘q bo‘lsa ham operator kadrda odam borligini ko‘rsin.
+        # Person detector 0.8 soniyada bir marta ishlaydi; oraliq kadrlarda
+        # oxirgi ramka chiziladi, shuning uchun jonli tasvir sekinlashmaydi.
+        if not face_data:
+            face_data = self._detect_person_data(frame)
 
         # 3. Kadrda chizish
         self._last_face_data = face_data
@@ -161,6 +180,32 @@ class FaceDetectionVisualizationService:
         annotated_frame = self._draw_stats(annotated_frame, stats)
 
         return annotated_frame, stats
+
+    def _detect_person_data(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        if self._person_service is None:
+            return []
+        now = time.monotonic()
+        if now - self._last_person_detection_at < 0.8:
+            return self._last_person_data
+        self._last_person_detection_at = now
+        try:
+            h, w = frame.shape[:2]
+            data = []
+            for person in self._person_service.detect_persons_sync(frame)[:5]:
+                bbox = person.get("bbox", [])
+                if len(bbox) != 4:
+                    continue
+                x1, y1, x2, y2 = bbox
+                x1, y1 = max(0, min(int(x1), w - 1)), max(0, min(int(y1), h - 1))
+                x2, y2 = max(0, min(int(x2), w - 1)), max(0, min(int(y2), h - 1))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                data.append({"bbox": (x1, y1, x2, y2), "display_name": "Anonim odam", "is_employee": False})
+            self._last_person_data = data
+            return data
+        except Exception as e:
+            logger.debug(f"Person visualization failed: {e}")
+            return self._last_person_data
 
     def _detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Yuzlarni aniqlash (YuNet yoki Haar Cascade)."""
@@ -231,13 +276,16 @@ class FaceDetectionVisualizationService:
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            # Rang tanlash: xodimlar ko'k, mijozlar sariq
-            color = self.BLUE if is_employee else self.YELLOW
+            # Xodim ham jonli ekranda sariq ramka bilan ajralib turadi;
+            # uning yozuvida esa "Xodim: Ism familiya" doim ko'rinadi.
+            color = self.YELLOW
 
             # Sariq/yashil to'rtburchak chizish (2px qalinlikda)
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
 
-            # Ismni ko'rsatish (agar mavjud bo'lsa)
+            # Ism yoki "Odam" yozuvini doim ko'rsatish.
+            if not display_name:
+                display_name = "Odam"
             if display_name:
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.6

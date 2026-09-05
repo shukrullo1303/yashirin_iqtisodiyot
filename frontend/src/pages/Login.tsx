@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Container, Paper, TextField, Button, Typography, Box, CircularProgress } from '@mui/material'
 import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
@@ -77,7 +77,7 @@ function Login() {
       >
         <Paper elevation={3} sx={{ p: 4, width: '100%' }}>
           <Typography component="h1" variant="h5" align="center" gutterBottom>
-            Digital Service Platform
+            Asaka tumani raqamli iqtisodiyot
           </Typography>
           <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 3 }}>
             Tizimga kirish
@@ -113,11 +113,6 @@ function Login() {
               {loading ? 'Kirilmoqda...' : 'Kirish'}
             </Button>
           </form>
-          <Box sx={{ textAlign: 'center' }}>
-            <Link to="/register" style={{ textDecoration: 'none', color: '#1976d2', fontWeight: 500 }}>
-              Akkauntingiz yo'qmi? Ro'yxatdan o'ting
-            </Link>
-          </Box>
         </Paper>
       </Box>
     </Container>

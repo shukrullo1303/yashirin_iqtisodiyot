@@ -12,6 +12,11 @@ class CameraSerializer(BaseSerializer):
     class Meta:
         model = models.Camera
         fields = "__all__"
+        # Never expose camera login credentials through a list/retrieve API.
+        extra_kwargs = {
+            "password": {"write_only": True},
+            "username": {"write_only": True},
+        }
         read_only_fields = (
             "id",
             "created_at",

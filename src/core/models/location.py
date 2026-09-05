@@ -59,7 +59,6 @@ class Camera(BaseModel):
     CAMERA_TYPE_CHOICES = [
         ('entrance', 'Kirish'),
         ('exit', 'Chiqish'),
-        ('internal', 'Ichki'),
     ]
 
     location = models.ForeignKey(
@@ -97,3 +96,37 @@ class Camera(BaseModel):
 
     def __str__(self):
         return f"{self.name} - {self.location.name}"
+
+
+class CameraDowntime(BaseModel):
+    """Kamera nofaol qoldirilgan vaqt oralig'i."""
+    camera = models.ForeignKey(Camera, on_delete=models.CASCADE, related_name='downtimes')
+    started_at = models.DateTimeField(db_index=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    reason = models.CharField(max_length=255, blank=True, default='Nofaol holat')
+
+    class Meta:
+        db_table = 'camera_downtimes'
+        ordering = ['-started_at']
+
+    @property
+    def duration_minutes(self):
+        end = self.ended_at or timezone.now()
+        return max(0, (end - self.started_at).total_seconds() / 60)
+
+
+class NvrGateway(BaseModel):
+    """Hududdagi NVR yoki AI gatewayning markaziy boshqaruv kartasi."""
+    STATUS_CHOICES = [("online", "Online"), ("offline", "Offline"), ("warning", "Ogohlantirish")]
+    location = models.OneToOneField(Location, on_delete=models.CASCADE, related_name="nvr_gateway")
+    name = models.CharField(max_length=255)
+    host = models.CharField(max_length=255, help_text="VPN ichki IP yoki hostname")
+    channel_count = models.PositiveIntegerField(default=8)
+    vpn_connected = models.BooleanField(default=False)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="offline")
+    last_heartbeat = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "nvr_gateways"
+        ordering = ["location__name"]

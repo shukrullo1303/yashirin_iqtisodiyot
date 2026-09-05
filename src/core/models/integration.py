@@ -19,6 +19,17 @@ class TaxIntegration(BaseModel):
     last_sync = models.DateTimeField(null=True, blank=True, verbose_name="Oxirgi sinxronizatsiya")
     reported_revenue = models.FloatField(default=0.0, verbose_name="Ҳисоботдаги тушум")
     tax_paid = models.FloatField(default=0.0, verbose_name="Тўланган солиқ")
+    REPORT_PERIOD_CHOICES = [
+        ("daily", "Kunlik"),
+        ("monthly", "Oylik"),
+    ]
+    report_period = models.DateField(null=True, blank=True, db_index=True, verbose_name="Hisobot sanasi")
+    report_period_type = models.CharField(max_length=10, choices=REPORT_PERIOD_CHOICES, default="daily", verbose_name="Hisobot davri")
+    entered_by = models.ForeignKey(
+        'User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='entered_tax_reports', verbose_name="Kiritgan inspektor"
+    )
+    is_manual = models.BooleanField(default=False, verbose_name="Qo'lda kiritilgan")
     sync_status = models.CharField(
         max_length=50, 
         choices=SYNC_STATUS_CHOICES, 

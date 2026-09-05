@@ -19,3 +19,11 @@ class LocationSerializer(BaseSerializer):
             "owner_username",
             "location_type_display",
         )
+
+
+class NvrGatewaySerializer(BaseSerializer):
+    location_name = serializers.CharField(source="location.name", read_only=True)
+    class Meta:
+        model = models.NvrGateway
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at", "location_name")

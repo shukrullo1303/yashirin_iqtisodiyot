@@ -14,8 +14,10 @@ def _start_camera_streams_safe():
     try:
         close_old_connections()
         from src.core.services.camera_service import CameraService
+        from src.core.services.visitor_monitor_service import VisitorMonitorService
 
         CameraService().start_active_camera_streams()
+        VisitorMonitorService.start()
     except Exception as exc:
         logger.warning("Kamera oqimlarini ishga tushirishda xato: %s", exc)
     finally:
@@ -33,5 +35,9 @@ class CoreConfig(AppConfig):
         except ImportError:
             pass
 
-        if 'runserver' in sys.argv and os.environ.get('RUN_MAIN') == 'true':
+        if 'runserver' in sys.argv and (os.environ.get('RUN_MAIN') == 'true' or '--noreload' in sys.argv):
+            from src.core.services.visitor_review_service import VisitorReviewWorker
+            VisitorReviewWorker.start()
+
+        if 'runserver' in sys.argv and os.environ.get('RUN_MAIN') == 'true' and os.environ.get('DISABLE_AUTO_CAMERA_STREAMS') != '1':
             threading.Thread(target=_start_camera_streams_safe, daemon=True).start()

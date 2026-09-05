@@ -232,7 +232,20 @@ class CameraStreamHub:
                     if hasattr(cv2, 'CAP_PROP_READ_TIMEOUT_MSEC'):
                         cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.timeout * 1000)
 
-                if cap is not None and cap.isOpened():
+                # Webcam Zoom/Teams yoki boshqa dastur tomonidan vaqtincha
+                # band bo‘lishi mumkin. Avvalgi kod ochilmagan VideoCapture
+                # obyektini saqlab qolardi; qurilma keyin bo‘shasa ham u hech
+                # qachon qayta ochilmas, natijada qora ekran qolardi.
+                if cap is not None and not cap.isOpened():
+                    cap.release()
+                    cap = None
+                    failure_delay = min(2.0, failure_delay + 0.2)
+                    self._error_count += 1
+                    self._last_error = "Webcam yoki video oqimini ochib bo'lmadi; qayta urinilmoqda"
+                    time.sleep(max(0.5, failure_delay))
+                    continue
+
+                if cap is not None:
                     success, frame = cap.read()
                     if success and frame is not None:
                         self._set_frame(frame)
